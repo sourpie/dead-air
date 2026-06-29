@@ -1,0 +1,197 @@
+@import 'tailwindcss';
+
+/* ════════════════════════════════════════════════════════════════════════
+   NEIGHBOURHOOD ECHOES — a cozy whodunit you can win.
+   Bright, playful board-game energy: a dusk-purple street, chunky rounded
+   cards, candy-bright neighbour colours, springy juice. Goal: collect clues,
+   accuse, score stars.
+   ════════════════════════════════════════════════════════════════════════ */
+@theme {
+  /* Backdrop (dusk over Maple Street) */
+  --color-grape: #2c1f4d;
+  --color-grape-2: #1d1438;
+
+  /* Light "card" surfaces */
+  --color-cream: #fffaf2;
+  --color-cream-2: #f4ecff;
+  --color-ink: #2a2148;
+  --color-ink-dim: #8378a8;
+  --color-card-line: #e7ddf5;
+
+  /* Text on the dark backdrop */
+  --color-text: #fbf4ff;
+  --color-dim: #b6a8d8;
+  --color-line: #43356b;
+
+  /* Candy palette */
+  --color-coral: #ff6b5e;
+  --color-teal: #25cfb0;
+  --color-gold: #ffc94d;
+  --color-violet: #b06bff;
+  --color-magenta: #e85fc0;
+  --color-good: #43d17a;
+  --color-bad: #ff5a72;
+
+  /* Neighbours */
+  --color-maya: #ff8a4c;   /* baker — warm orange */
+  --color-sam: #36c5e0;    /* anxious — sky cyan */
+  --color-jules: #e85fc0;  /* gossip — magenta */
+
+  --font-display: 'Fredoka', 'Trebuchet MS', sans-serif;
+  --font-body: 'Nunito', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-body);
+  color: var(--color-text);
+  background-color: var(--color-grape);
+  background-image:
+    radial-gradient(60% 50% at 12% 0%, rgba(255, 138, 76, 0.22), transparent 60%),
+    radial-gradient(55% 45% at 100% 8%, rgba(54, 197, 224, 0.18), transparent 60%),
+    radial-gradient(70% 60% at 50% 110%, rgba(176, 107, 255, 0.25), transparent 60%),
+    linear-gradient(180deg, var(--color-grape) 0%, var(--color-grape-2) 100%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: var(--font-display);
+}
+
+/* Confetti-dot sparkle layer (very subtle) */
+.sparkle {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    radial-gradient(rgba(255, 255, 255, 0.5) 1px, transparent 1.4px);
+  background-size: 46px 46px;
+  background-position: 0 0;
+  mask-image: radial-gradient(120% 90% at 50% 0%, #000 0%, transparent 70%);
+}
+
+/* ── Cards & panels ──────────────────────────────────────────────────── */
+
+/* Bright card (clues, dialogue, evidence) */
+.gcard {
+  background: linear-gradient(180deg, var(--color-cream), var(--color-cream-2));
+  color: var(--color-ink);
+  border: 2px solid #fff;
+  border-radius: 20px;
+  box-shadow:
+    0 2px 0 rgba(255, 255, 255, 0.7) inset,
+    0 16px 30px -16px rgba(20, 8, 48, 0.7);
+}
+
+/* Frosted panel on the dusk backdrop (HUD chrome, side rails) */
+.gpanel {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1.5px solid var(--color-line);
+  border-radius: 20px;
+  box-shadow: 0 18px 40px -28px rgba(0, 0, 0, 0.8);
+  backdrop-filter: blur(8px);
+}
+
+.chip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ── Chunky buttons with press juice ─────────────────────────────────── */
+.btn {
+  font-family: var(--font-display);
+  font-weight: 600;
+  border-radius: 14px;
+  transition: transform 0.12s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.12s ease,
+    box-shadow 0.12s ease;
+  cursor: pointer;
+}
+.btn:active {
+  transform: translateY(2px);
+}
+.btn-pop {
+  color: #fff;
+  background: linear-gradient(180deg, var(--color-coral), #ef4f43);
+  box-shadow: 0 6px 0 #c23b32, 0 14px 24px -10px rgba(255, 107, 94, 0.7);
+}
+.btn-pop:active {
+  box-shadow: 0 2px 0 #c23b32, 0 8px 14px -10px rgba(255, 107, 94, 0.7);
+}
+.btn-gold {
+  color: #4a3500;
+  background: linear-gradient(180deg, #ffd96b, var(--color-gold));
+  box-shadow: 0 6px 0 #d39a1f, 0 14px 24px -10px rgba(255, 201, 77, 0.7);
+}
+.btn-gold:active {
+  box-shadow: 0 2px 0 #d39a1f;
+}
+.btn-soft {
+  color: var(--color-text);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1.5px solid var(--color-line);
+}
+.btn-soft:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* ── Motion ───────────────────────────────────────────────────────────── */
+@keyframes pop-in {
+  0% { opacity: 0; transform: scale(0.85) translateY(8px); }
+  60% { opacity: 1; transform: scale(1.04); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
+}
+.animate-pop { animation: pop-in 0.4s cubic-bezier(0.2, 0.9, 0.25, 1.2) both; }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-rise { animation: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+@keyframes float-y {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.animate-float { animation: float-y 4s ease-in-out infinite; }
+
+@keyframes toast-in {
+  0% { opacity: 0; transform: translateX(40px) scale(0.9); }
+  15% { opacity: 1; transform: translateX(0) scale(1); }
+  85% { opacity: 1; transform: translateX(0) scale(1); }
+  100% { opacity: 0; transform: translateX(40px) scale(0.95); }
+}
+.animate-toast { animation: toast-in 3s ease both; }
+
+@keyframes star-pop {
+  0% { opacity: 0; transform: scale(0) rotate(-30deg); }
+  70% { transform: scale(1.25) rotate(8deg); }
+  100% { opacity: 1; transform: scale(1) rotate(0); }
+}
+.animate-star { animation: star-pop 0.5s cubic-bezier(0.2, 0.9, 0.25, 1.4) both; }
+
+@keyframes thread-travel {
+  from { stroke-dashoffset: 600; }
+  to { stroke-dashoffset: 0; }
+}
+.thread-travel {
+  stroke-dasharray: 600;
+  animation: thread-travel 1.6s ease both;
+}
+
+@keyframes confetti-fall {
+  0% { opacity: 0; transform: translateY(-20px) rotate(0); }
+  10% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(60vh) rotate(540deg); }
+}
