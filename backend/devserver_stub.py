@@ -1,20 +1,26 @@
-"""Run the REAL game API with cognee STUBBED — no API key, no heavy install.
+"""Run the REAL game API with cognee STUBBED — no API key, no network.
 
 Use this to play/test the whole game UI instantly:
-  * deterministic flow (flags, relationships, branching, ledger, endings) is REAL,
-  * memory writes + recall are stubbed (instant — no quota, no retry backoff),
-  * recall returns nothing, so NPC lines come from the authored fallbacks
-    (badged TEMPLATE in the UI).
+  * deterministic flow (case generation, schedule, clues, contradictions,
+    scoring) is REAL,
+  * memory writes + recall + forget are stubbed (instant — no quota),
+  * recall returns nothing, so NPC lines come from templated fallbacks
+    (badged SCRIPT in the UI).
 
-This is NOT the real memory path — for live cognee recall + generated lines, install
-requirements.txt and either set COGNEE_SERVICE_URL+COGNEE_API_KEY (Cognee Cloud) or a
-Gemini key (local), then run uvicorn normally (see README.md).
+For live cognee recall + generated lines, set COGNEE_SERVICE_URL+COGNEE_API_KEY
+(Cognee Cloud) and run uvicorn normally (see README.md).
 
     .venv/bin/python devserver_stub.py        # serves on http://127.0.0.1:8000
 """
+import os
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock
+
+# The stub promises "no API key, no network" — force the cognee path even if
+# the developer's .env enables the Bedrock backend.
+os.environ["LLM_BACKEND"] = ""
+os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
 
 # --- Stub cognee BEFORE importing config (config imports cognee at load) ----- #
 _c = ModuleType("cognee")
@@ -24,8 +30,9 @@ _c.config = SimpleNamespace(
 )
 _c.prune = SimpleNamespace(prune_data=AsyncMock(), prune_system=AsyncMock())
 _c.remember = AsyncMock(return_value=None)
+_c.forget = AsyncMock(return_value=None)
 _c.serve = AsyncMock(return_value=None)
-_c.recall = AsyncMock(return_value=[])  # empty -> authored fallback lines
+_c.recall = AsyncMock(return_value=[])  # empty -> templated fallback lines
 sys.modules["cognee"] = _c
 
 import uvicorn  # noqa: E402

@@ -1,52 +1,31 @@
-"""Validation guardrail between the LLM and the player (plan §7 / §24).
+"""Validation guardrail between the LLM and the player.
 
-The LLM is asked for JSON {npcLine, emotion}. Before that line ever reaches the
-player we:
-  1. parse it (Pydantic) — malformed JSON => reject,
-  2. reject any line that leaks a *locked fact* whose story gate isn't met yet
-     (e.g. an NPC blurting that Maya lost the key before she has confided it),
-  3. trim to the plan's 30-45 word pacing budget.
+Before any generated line reaches the player we:
+  1. reject empty lines,
+  2. enforce the per-run gates the mystery generator emitted —
+     * confession gate: the culprit must never admit the act, and must never
+       place themselves at the scene during the night,
+     * locked-fact gates: keyword co-occurrence sets that block a key fact
+       (sighting, door-log gap, secret, motive) until its clue is found,
+  3. trim to the 45-word pacing budget.
 
-A rejection raises ValueError; the dialogue layer then serves the node's authored
-fallback line, so story truth never depends on the model behaving.
+A rejection raises ValueError; the dialogue layer then serves the deterministic
+templated fallback, so story truth never depends on the model behaving. Gates
+are deliberately coarse — a false positive only costs us a fallback line.
 """
 import re
 
-from pydantic import BaseModel, field_validator
-
 _MAX_WORDS = 45
 
-EMOTIONS = {
-    "neutral", "warm", "anxious", "defensive", "hurt", "angry",
-    "relieved", "excited", "smug", "guarded", "sad",
-}
+# Static admission shapes; combined with the per-run culprit id from the gates.
+_ADMISSION = re.compile(
+    r"\b(it was me|i did it|i'?m the one|i am the one|"
+    r"i (sabotaged|cut|broke|disabled|wrecked|damaged) (it|the|that))\b",
+    re.I,
+)
 
-# (pattern, flag that must be True for the fact to be sayable). If the flag is
-# False and a generated line matches the pattern, it's an early leak => reject.
-# Proximity-based so "lost the shed key" / "the key Maya lost" both trip it.
-_LOCKED_FACTS = [
-    (re.compile(r"lost\b[^.!?]{0,25}\bkey\b", re.I), "mayaRevealedLostKey"),
-    (re.compile(r"\bkey\b[^.!?]{0,25}\blost\b", re.I), "mayaRevealedLostKey"),
-]
-
-
-class NpcLine(BaseModel):
-    npcLine: str
-    emotion: str = "neutral"
-
-    @field_validator("npcLine")
-    @classmethod
-    def _nonempty(cls, v: str) -> str:
-        v = v.strip()
-        if not v:
-            raise ValueError("empty npcLine")
-        return v
-
-    @field_validator("emotion")
-    @classmethod
-    def _known_emotion(cls, v: str) -> str:
-        v = (v or "").strip().lower()
-        return v if v in EMOTIONS else "neutral"
+# Night-time markers for the placement check (culprit + scene room + night).
+_NIGHT = re.compile(r"\b(that night|last night|2[23]:00|0[0-3]:00|midnight)\b", re.I)
 
 
 def _trim_words(text: str, limit: int = _MAX_WORDS) -> str:
@@ -54,28 +33,35 @@ def _trim_words(text: str, limit: int = _MAX_WORDS) -> str:
     if len(words) <= limit:
         return text
     clipped = " ".join(words[:limit])
-    # Prefer ending on sentence punctuation within the budget.
     m = re.search(r"^(.*[.!?])", clipped)
     return (m.group(1) if m else clipped.rstrip(",;:") + "…")
 
 
-def validate_text(text: str, state: dict) -> str:
-    """Validate a generated NPC line (plain text) against the current state.
+def validate_text(text: str, state: dict, speaker: str | None = None) -> str:
+    """Validate a generated line against the current state's per-run gates.
 
-    Returns the (possibly trimmed) line. Raises ValueError on an empty line or a
-    locked-fact leak — the caller then falls back to the authored line.
+    Returns the (possibly trimmed) line. Raises ValueError on an empty line or
+    any gate trip — the caller then falls back to the templated line.
     """
     text = (text or "").strip()
     if not text:
         raise ValueError("empty line")
-    flags = state.get("flags", {})
-    for pattern, required_flag in _LOCKED_FACTS:
-        if pattern.search(text) and not flags.get(required_flag):
-            raise ValueError(f"locked fact leaked (gate {required_flag} not met)")
+    lower = text.lower()
+    gates = state.get("case", {}).get("gates", {})
+
+    confession = gates.get("confession")
+    if confession and speaker == confession["npc"]:
+        if _ADMISSION.search(text):
+            raise ValueError("confession gate: admission phrasing")
+        scene_word = confession["keywords"][-1]
+        if scene_word in lower and _NIGHT.search(text) and re.search(r"\bi\b", lower):
+            raise ValueError("confession gate: self-placement at the scene")
+
+    found = set(state.get("cluesFound", []))
+    for gate in gates.get("locked", []):
+        if gate["clueId"] in found:
+            continue
+        if all(k in lower for k in gate["keywords"]):
+            raise ValueError(f"locked fact leaked (clue {gate['clueId']} not found)")
+
     return _trim_words(text)
-
-
-def validate_line(raw: dict, state: dict) -> tuple[str, str]:
-    """Validate a structured {npcLine, emotion} payload (kept for back-compat)."""
-    parsed = NpcLine.model_validate(raw)
-    return validate_text(parsed.npcLine, state), parsed.emotion

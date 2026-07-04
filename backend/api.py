@@ -1,27 +1,30 @@
-"""FastAPI layer for Neighbourhood Echoes — the surface the React client calls.
+"""FastAPI layer for DEAD AIR — the surface the React client calls.
 
 Run:
     .venv/bin/uvicorn api:app --reload --port 8000
 
-Two source-of-truth split (plan §5):
-  * deterministic game state (day/flags/relationships/notebook/ledger) -> gamestate
-  * NPC memory recall + LLM phrasing                                    -> dialogue/memory
+Two source-of-truth split:
+  * deterministic game state (case/schedule/clues/relationships/ledger) -> gamestate
+  * NPC memory recall + LLM phrasing                                     -> dialogue/memory
 
-Seeding is heavy (LLM calls); prefer the CLI for it:
-    .venv/bin/python ask.py --reset --seed
+Every response goes through gamestate.public_state() — the redaction boundary
+that keeps the culprit, the lies, the gates and unfired gossip server-side.
 """
+import asyncio
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import config  # noqa: F401  -- loads .env + sets cognee dirs on import
+import content
 import dialogue
 import gamestate
-import memory
-import story
-from npcs import NPCS
+import interview
+import mystery
+from crew import CREW
 
-app = FastAPI(title="Neighbourhood Echoes - Game API", version="0.2.0")
+app = FastAPI(title="DEAD AIR - Game API", version="0.3.0")
 
 # The Vite dev server (localhost:5173) calls this API from the browser.
 app.add_middleware(
@@ -37,32 +40,45 @@ app.add_middleware(
 # --------------------------------------------------------------------------- #
 
 class StartRequest(BaseModel):
-    reseed: bool = False
+    seed: int | None = None
+    reseed: bool = True
 
 
 class TalkRequest(BaseModel):
     npcId: str
 
 
-class ChooseRequest(BaseModel):
+class AskRequest(BaseModel):
     npcId: str
-    choiceId: str
+    verb: str
+    arg: str | None = None
 
 
-class SolveRequest(BaseModel):
-    theoryId: str
+class SayRequest(BaseModel):
+    npcId: str
+    text: str
 
 
-# Legacy debug models (kept for back-compat with the Phase-1 tools).
-class DialogueRequest(BaseModel):
-    npc_id: str
-    player_input: str
+class AdvanceRequest(BaseModel):
+    playerRoom: str | None = None
 
 
-class RecallRequest(BaseModel):
-    npc_id: str
-    query: str
-    context_only: bool = True
+class OverhearRequest(BaseModel):
+    encounterId: str
+    playerRoom: str
+
+
+class ExamineRequest(BaseModel):
+    spotId: str
+
+
+class AccuseRequest(BaseModel):
+    npcId: str
+
+
+def _check_npc(npc_id: str) -> None:
+    if npc_id not in CREW:
+        raise HTTPException(status_code=404, detail=f"Unknown npcId: {npc_id}")
 
 
 # --------------------------------------------------------------------------- #
@@ -71,130 +87,167 @@ class RecallRequest(BaseModel):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "npcs": list(NPCS)}
-
-
-@app.get("/npcs")
-async def list_npcs():
-    return [
-        {"id": k, "name": v["name"], "location": story.NPC_LOCATION[k],
-         "datasets": v["datasets"]}
-        for k, v in NPCS.items()
-    ]
-
-
-@app.get("/locations")
-async def list_locations():
-    return list(story.LOCATIONS.values())
+    return {"status": "ok", "crew": list(CREW)}
 
 
 @app.get("/game/catalog")
 async def game_catalog():
-    """Clue catalog + accusation theories for the UI. Never leaks the solution."""
-    return {"clues": story.clues_catalog(), "theories": story.THEORIES}
+    """Static-ish display data: crew, rooms, adjacency. Never leaks the case."""
+    return {
+        "crew": [{"id": c["id"], "name": c["name"], "post": c["post"]} for c in CREW.values()],
+        "rooms": mystery.ROOMS,
+        "adjacency": mystery.ADJACENCY,
+    }
 
 
 # --------------------------------------------------------------------------- #
-# Game flow (plan §7)
+# Game flow
 # --------------------------------------------------------------------------- #
 
 @app.get("/game/state")
 async def game_state():
-    return gamestate.get_state()
+    return gamestate.public_state()
 
 
 @app.post("/game/start")
 async def game_start(req: StartRequest):
-    """Reset game state. reseed=True also wipes + reseeds Cognee (heavy, LLM calls)."""
-    return await gamestate.start(reseed=req.reseed)
+    """New run: fresh case + schedule immediately; memory forget+seed runs in
+    the background (state.seeding tracks it — early lines fall back safely)."""
+    await gamestate.start(seed=req.seed, reseed=req.reseed)
+    return gamestate.public_state()
 
 
 @app.post("/npc/talk")
 async def npc_talk(req: TalkRequest):
-    """Recall context, generate+validate the NPC's line, attach authored choices.
-    Read-only — no state mutation here (mutation happens in /game/choose)."""
-    if req.npcId not in NPCS:
-        raise HTTPException(status_code=404, detail=f"Unknown npcId: {req.npcId}")
+    """Open a conversation: zero-call templated greeting + the live verb menu.
+    Also pre-warms this NPC's memory-context cache in the background so the
+    player's first real question doesn't pay the retrieval round trip."""
+    _check_npc(req.npcId)
     state = gamestate.get_state()
-    node_id = state["convo"][req.npcId]
-    node = story.NODES[node_id]
-    line = await dialogue.generate_line(req.npcId, node, state)
+    asyncio.get_running_loop().create_task(dialogue.prefetch_context(req.npcId, state))
     return {
         "npcId": req.npcId,
-        "name": NPCS[req.npcId]["name"],
-        "nodeId": node_id,
-        "npcLine": line["npcLine"],
-        "emotion": line["emotion"],
-        "source": line["source"],
-        "choices": gamestate.available_choices(node, state),
+        "name": CREW[req.npcId]["name"],
+        "npcLine": content.GREETINGS[req.npcId],
+        "emotion": content.emotion_for(req.npcId, "free_text", 0),
+        "source": "script",
+        "verbs": interview.available_verbs(state, req.npcId),
         "relationship": state["relationships"][req.npcId],
-        "day": state["day"],
+        "shift": state["shift"],
     }
 
 
-@app.post("/game/choose")
-async def game_choose(req: ChooseRequest):
-    """Apply a choice's authored effects (flags, relationship deltas, notebook,
-    Cognee memory write-back) and advance the conversation node."""
-    if req.npcId not in NPCS:
-        raise HTTPException(status_code=404, detail=f"Unknown npcId: {req.npcId}")
+@app.post("/npc/ask")
+async def npc_ask(req: AskRequest):
+    """One verb beat: deterministic effects first, then the generated line."""
+    _check_npc(req.npcId)
     try:
-        state, new_clues = await gamestate.apply_choice(req.npcId, req.choiceId)
+        applied = gamestate.apply_verb(req.npcId, req.verb, req.arg)
     except PermissionError as e:
         raise HTTPException(status_code=409, detail=str(e))
     except KeyError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"state": state, "nextNodeId": state["convo"][req.npcId], "newClues": new_clues}
+    state = applied["state"]
+    node = interview.synth_node(state, req.npcId, req.verb, req.arg)
+    label = next((v["label"] for v in interview.available_verbs(state, req.npcId)
+                  if v["verb"] == req.verb and v["arg"] == req.arg), None)
+    line = await dialogue.generate_line(req.npcId, node, state, player_said=label)
+    return {
+        "npcId": req.npcId,
+        "name": CREW[req.npcId]["name"],
+        "npcLine": line["npcLine"],
+        "emotion": line["emotion"],
+        "source": line["source"],
+        "verbs": interview.available_verbs(state, req.npcId),
+        "relationship": state["relationships"][req.npcId],
+        "newClues": applied["newClues"],
+        "newStatements": applied["newStatements"],
+        "state": gamestate.public_state(),
+    }
 
 
-@app.post("/day/advance")
-async def day_advance():
-    """Day 1 -> Day 2; spreads gossip into shared memory if the player betrayed Maya."""
-    return await gamestate.advance_day()
+@app.post("/npc/say")
+async def npc_say(req: SayRequest):
+    """Free-text investigator line — memory write-back + memory-grounded reply."""
+    _check_npc(req.npcId)
+    text = req.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Empty text")
+    if len(text) > 240:
+        raise HTTPException(status_code=400, detail="Text too long (max 240 chars)")
+    state = await gamestate.apply_free_text(req.npcId, text)
+    line = await dialogue.generate_free_reply(req.npcId, state, text)
+    return {
+        "npcId": req.npcId,
+        "name": CREW[req.npcId]["name"],
+        "npcLine": line["npcLine"],
+        "emotion": line["emotion"],
+        "source": line["source"],
+        "relationship": state["relationships"][req.npcId],
+        "state": gamestate.public_state(),
+    }
 
 
-@app.post("/game/solve")
-async def game_solve(req: SolveRequest):
-    """Make the accusation and get the scored result (clues + correctness + trust)."""
-    return gamestate.solve(req.theoryId)
+@app.post("/shift/advance")
+async def shift_advance(req: AdvanceRequest):
+    """Close the shift: fire its gossip transfers, open the next shift's plan."""
+    r = gamestate.advance_shift(req.playerRoom)
+    return {"state": gamestate.public_state(), "firedTransfers": r["firedTransfers"]}
 
+
+@app.post("/encounter/overhear")
+async def encounter_overhear(req: OverhearRequest):
+    """Eavesdrop an active encounter. Clue grant is deterministic; the lines are
+    generated lazily (one cognee call) and fall back to a template on failure."""
+    try:
+        r = gamestate.apply_overhear(req.encounterId, req.playerRoom)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    exchange = await dialogue.generate_exchange(r["state"], r["encounter"])
+    return {
+        "encounterId": req.encounterId,
+        "lines": exchange["lines"],
+        "source": exchange["source"],
+        "newClues": r["newClues"],
+        "state": gamestate.public_state(),
+    }
+
+
+@app.post("/world/examine")
+async def world_examine(req: ExamineRequest):
+    try:
+        state, new_clues, result = gamestate.examine(req.spotId)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown spotId: {req.spotId}")
+    return {"state": gamestate.public_state(), "newClues": new_clues, **result}
+
+
+@app.post("/game/accuse")
+async def game_accuse(req: AccuseRequest):
+    """The emergency meeting: eject one crewmate, get the scored result."""
+    _check_npc(req.npcId)
+    gamestate.accuse(req.npcId)
+    return gamestate.public_state()
+
+
+# --------------------------------------------------------------------------- #
+# Debug (the Memory Debugger UI + dataset watching)
+# --------------------------------------------------------------------------- #
 
 @app.get("/debug/memories/{npc_id}")
 async def debug_memories(npc_id: str):
-    """Memory Debugger feed: this NPC's ledger entries (owner/type/text/day/importance).
-    Deterministic — read straight from the ledger, no LLM."""
-    if npc_id not in NPCS:
-        raise HTTPException(status_code=404, detail=f"Unknown npc_id: {npc_id}")
+    _check_npc(npc_id)
     state = gamestate.get_state()
-    entries = [e for e in state["ledger"] if e["ownerNpc"] in (npc_id, "shared")]
+    entries = [e for e in state["ledger"]
+               if e["ownerNpc"] in (npc_id, "shared") or npc_id in str(e.get("datasets", []))]
     return {"npcId": npc_id, "memories": entries}
 
 
-# --------------------------------------------------------------------------- #
-# Legacy debug endpoints (Phase-1 — proof of dataset isolation)
-# --------------------------------------------------------------------------- #
-
-@app.post("/dialogue/respond")
-async def dialogue_respond(req: DialogueRequest):
-    try:
-        return await dialogue.generate_response(req.npc_id, req.player_input)
-    except KeyError:
-        raise HTTPException(status_code=404, detail=f"Unknown npc_id: {req.npc_id}")
-
-
-@app.post("/memory/recall")
-async def memory_recall(req: RecallRequest):
-    if req.npc_id not in NPCS:
-        raise HTTPException(status_code=404, detail=f"Unknown npc_id: {req.npc_id}")
-    async with memory.LOCK:
-        results = await memory.recall_for_npc(
-            req.npc_id, req.query, context_only=req.context_only
-        )
-    return {"npc_id": req.npc_id, "results": [memory.as_text(r) for r in results]}
-
-
-@app.post("/admin/reset")
-async def admin_reset():
-    async with memory.LOCK:
-        await memory.reset()
-    return {"status": "reset"}
+@app.get("/debug/datasets")
+async def debug_datasets():
+    """Watch per-run dataset lifecycle (forget is best-effort by design)."""
+    state = gamestate.get_state()
+    return {"runId": state["run"]["runId"], "seeding": state["run"]["seeding"],
+            "datasets": state["run"]["datasets"]}

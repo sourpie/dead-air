@@ -56,6 +56,7 @@ call), and falls back to authored lines if recall is unavailable.
 | GET  | `/game/state` | current day, flags, relationships, notebook, ledger |
 | POST | `/game/start` | reset game state (`{"reseed":true}` also wipes+reseeds Cognee) |
 | POST | `/npc/talk` | `{npcId}` → recalled+validated NPC line, emotion, gated choices |
+| POST | `/npc/say` | `{npcId, text}` → free-text player line: memory-grounded reply; accusations bump suspicion (deterministic heuristic); substantial lines are remembered (ledger + Cognee). Never advances the story node |
 | POST | `/game/choose` | `{npcId, choiceId}` → apply effects + Cognee memory write-back |
 | POST | `/day/advance` | Day 1→2; spreads gossip into shared memory if the player betrayed Maya |
 | POST | `/game/conclude` | end + compute the ending from final flags |

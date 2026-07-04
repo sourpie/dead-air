@@ -1,177 +1,282 @@
-"""Automated integration test for the deterministic game flow (no key needed).
+"""Integration test for DEAD AIR — deterministic flow with cognee stubbed.
 
-Stubs cognee (incl. recall generation), then drives the real FastAPI app via
-TestClient to verify flags, relationship deltas, choice gating, the memory ledger,
-day-advance gossip spread, both endings, the cognee-generation path, and the
-generation->fallback guardrail.
+Verifies the whole game works independently of LLM generation: case redaction,
+verbs, statements, examine spots, contradictions, overhear gating + clue grants,
+scoring, and the per-run validator gates.
 
-    .venv/bin/python test_flow.py
+Run: .venv/bin/python -m pytest test_flow.py -q
 """
+import os
 import sys
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock
 
-# ---- Stub cognee BEFORE importing config (config imports cognee at load) ----- #
-_cognee = ModuleType("cognee")
-_cognee.config = SimpleNamespace(
+# Force the cognee generation path: the developer's .env may enable the Bedrock
+# backend, and tests must NEVER make live LLM calls.
+os.environ["LLM_BACKEND"] = ""
+os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
+
+# --- Stub cognee BEFORE importing config (config imports cognee at load) ----- #
+_c = ModuleType("cognee")
+_c.config = SimpleNamespace(
     system_root_directory=lambda *a, **k: None,
     data_root_directory=lambda *a, **k: None,
 )
-_cognee.prune = SimpleNamespace(prune_data=AsyncMock(), prune_system=AsyncMock())
-_cognee.remember = AsyncMock(return_value=None)
-_cognee.serve = AsyncMock(return_value=None)
-# recall is the generation path now; default [] -> empty -> authored fallback.
-_cognee.recall = AsyncMock(return_value=[])
-sys.modules["cognee"] = _cognee
+_c.remember = AsyncMock(return_value=None)
+_c.forget = AsyncMock(return_value=None)
+_c.serve = AsyncMock(return_value=None)
+_c.recall = AsyncMock(return_value=[])
+sys.modules["cognee"] = _c
 
+import json  # noqa: E402
+
+import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+
 import api  # noqa: E402
+import gamestate  # noqa: E402
+import mystery  # noqa: E402
+import validators  # noqa: E402
 
-client = TestClient(api.app)
-_failures = []
-
-
-def set_recall(value):
-    """Control what cognee.recall returns (a list of result objects or strings)."""
-    _cognee.recall.return_value = value
+SEED = 1234
+CASE = mystery.generate_case(SEED)  # ground truth, derived independently
 
 
-def check(label, cond):
-    print(f"  {'PASS' if cond else 'FAIL'}  {label}")
-    if not cond:
-        _failures.append(label)
+@pytest.fixture()
+def client(tmp_path):
+    gamestate._STATE_PATH = tmp_path / "game_state.json"
+    gamestate._state = None
+    with TestClient(api.app) as c:
+        r = c.post("/game/start", json={"seed": SEED, "reseed": False})
+        assert r.status_code == 200
+        yield c
 
 
-def talk(npc):
-    return client.post("/npc/talk", json={"npcId": npc}).json()
+def _talk(client, npc):
+    r = client.post("/npc/talk", json={"npcId": npc})
+    assert r.status_code == 200
+    return r.json()
 
 
-def choose(npc, choice):
-    return client.post("/game/choose", json={"npcId": npc, "choiceId": choice}).json()
+def _ask(client, npc, verb, arg=None):
+    return client.post("/npc/ask", json={"npcId": npc, "verb": verb, "arg": arg})
 
 
-def reset():
-    return client.post("/game/start", json={"reseed": False}).json()
+# --------------------------------------------------------------------------- #
+
+def test_public_state_never_leaks_the_case(client):
+    state = client.get("/game/state").json()
+    blob = json.dumps(state)
+    assert "culpritId" not in blob
+    assert "topicText" not in blob
+    assert "gates" not in blob
+    assert "coverStory" not in blob
+    assert CASE["motive"] not in blob
+    # but the playable surface is there
+    assert state["shiftPlan"]["encounters"]
+    assert len(state["clueCatalog"]) == 7
+    assert state["maxShifts"] == 4
 
 
-def solve(theory):
-    return client.post("/game/solve", json={"theoryId": theory}).json()
+def test_talk_returns_greeting_and_verbs(client):
+    t = _talk(client, "oda")
+    assert t["source"] == "script" and t["npcLine"]
+    verb_ids = {v["id"] for v in t["verbs"]}
+    assert "ask_whereabouts" in verb_ids and "ask_sabotage" in verb_ids
+    assert sum(1 for v in verb_ids if v.startswith("ask_about:")) == 4
 
 
-print("\n[1] Start / initial state")
-st = reset()
-check("day starts at 1", st["day"] == 1)
-check("maya trust seeded 50", st["relationships"]["maya"]["trust"] == 50)
-check("no flags set", not any(st["flags"].values()))
-check("empty ledger + notebook + clues", st["ledger"] == [] and st["notebook"] == [] and st["cluesFound"] == [])
+def test_whereabouts_records_statements_and_liars_lie(client):
+    culprit, herring = CASE["culpritId"], CASE["herringId"]
+    r = _ask(client, culprit, "ask_whereabouts").json()
+    assert culprit in r["newStatements"]
+    assert r["source"] == "fallback"  # stub recall -> templated line
+    state = client.get("/game/state").json()
+    assert state["statements"][culprit] == CASE["coverStory"]
+    _ask(client, herring, "ask_whereabouts")
+    state = client.get("/game/state").json()
+    assert state["statements"][herring] == CASE["herring"]["claim"]
 
-print("\n[1b] Catalog never leaks the solution")
-cat = client.get("/game/catalog").json()
-check("catalog has 5 clues + 4 theories", len(cat["clues"]) == 5 and len(cat["theories"]) == 4)
-check("no theory is flagged correct", all("correct" not in t for t in cat["theories"]))
 
-print("\n[2] Locked choices hidden before gate met")
-ids = {c["id"] for c in talk("maya")["choices"]}
-check("maya_start offers reassure+probe only", ids == {"maya_reassure", "maya_probe"})
-jids = {c["id"] for c in talk("jules")["choices"]}
-check("jules betrayal choice hidden (key not revealed)", "jules_tell_secret" not in jids)
-check("jules keep-quiet hidden (no promise yet)", "jules_keep_quiet" not in jids)
+def test_examine_grants_clues_once_and_masks_door_log(client):
+    r = client.post("/world/examine", json={"spotId": "scene_sweep"}).json()
+    assert "scene_item" in r["newClues"]
+    r2 = client.post("/world/examine", json={"spotId": "scene_sweep"}).json()
+    assert r2["newClues"] == []
+    r3 = client.post("/world/examine", json={"spotId": "ops_console"}).json()
+    assert "door_gap" in r3["newClues"]
+    corrupted = [row for row in r3["doorLog"] if row["corrupted"]]
+    assert len(corrupted) == 1 and corrupted[0]["room"] == "▒▒▒▒▒"
+    assert client.post("/world/examine", json={"spotId": "nope"}).status_code == 404
 
-print("\n[3] Build trust until Maya reveals the lost key (gated on trust>=65)")
-choose("maya", "maya_reassure"); talk("maya")
-choose("maya", "maya_support_sam")
-t = talk("maya")
-check("trust climbed to 70", t["relationship"]["trust"] == 70)
-check("ask_key now available (gate met)", any(c["id"] == "maya_ask_key" for c in t["choices"]))
-r = choose("maya", "maya_ask_key")
-st = r["state"]
-check("mayaRevealedLostKey flag set", st["flags"]["mayaRevealedLostKey"])
-check("secret event written to ledger", any(e["type"] == "secret" for e in st["ledger"]))
-check("notebook records the admission", any("lost it" in n for n in st["notebook"]))
-check("clue 'maya_lost_key' collected", "maya_lost_key" in st["cluesFound"])
-check("newClues surfaced for the toast", "maya_lost_key" in r["newClues"])
-check("advanced to reveal node", r["nextNodeId"] == "maya_reveal_key")
 
-print("\n[4] Promise (the secret-keeping setup)")
-st = choose("maya", "maya_promise")["state"]
-check("playerPromisedMaya set", st["flags"]["playerPromisedMaya"])
-check("promise event targets player_profile",
-      any(e["type"] == "promise" and "player_profile" in e["datasets"] for e in st["ledger"]))
-check("maya trust >= 80 after promise", st["relationships"]["maya"]["trust"] >= 80)
+def test_present_item_traces_owner(client):
+    client.post("/world/examine", json={"spotId": "scene_sweep"})
+    innocent = next(n for n in mystery.CREW_IDS if n != CASE["culpritId"])
+    r = _ask(client, innocent, "present_clue", "scene_item").json()
+    assert "item_owner" in r["newClues"]
+    # presenting to the culprit instead: suspicion, no clue
+    r2 = _ask(client, CASE["culpritId"], "present_clue", "scene_item")
+    assert r2.status_code == 200 and r2.json()["newClues"] == []
 
-print("\n[5] Betrayal: tell Jules (choice now unlocked)")
-jids = {c["id"] for c in talk("jules")["choices"]}
-check("jules_tell_secret now available", "jules_tell_secret" in jids)
-check("jules_keep_quiet now available (promise made)", "jules_keep_quiet" in jids)
-st = choose("jules", "jules_tell_secret")["state"]
-check("playerToldJules set", st["flags"]["playerToldJules"])
-check("gossip event under jules", any(e["type"] == "gossip" and e["ownerNpc"] == "jules" for e in st["ledger"]))
 
-print("\n[6] Advance day -> gossip spreads to Maya")
-before = len(st["ledger"])
-st = client.post("/day/advance").json()
-check("day == 2", st["day"] == 2)
-check("two spread events added", len(st["ledger"]) == before + 2)
-check("betrayal event reached maya", any(e["type"] == "betrayal" and e["ownerNpc"] == "maya" for e in st["ledger"]))
-check("shared rumour event added", any(e["ownerNpc"] == "shared" for e in st["ledger"]))
-check("maya convo branched to confront", st["convo"]["maya"] == "maya_d2_confront")
+def test_confrontations_exonerate_and_fluster(client):
+    culprit, herring = CASE["culpritId"], CASE["herringId"]
+    # gather prerequisites
+    _ask(client, culprit, "ask_whereabouts")
+    _ask(client, herring, "ask_whereabouts")
+    client.post("/world/examine", json={"spotId": "ops_console"})
+    # confronting the wrong crewmate -> 409
+    bad = _ask(client, CASE["witnessId"], "confront", "herring_vs_log")
+    assert bad.status_code == 409
+    # herring: exonerated
+    r = _ask(client, herring, "confront", "herring_vs_log").json()
+    assert "herring_truth" in r["newClues"]
+    # culprit: flustered
+    r2 = _ask(client, culprit, "confront", "culprit_vs_log").json()
+    assert "alibi_broken" in r2["newClues"]
+    state = client.get("/game/state").json()
+    assert state["flustered"][culprit] == 1
+    # confront verbs disappear once used
+    verbs = {v["id"] for v in _talk(client, herring)["verbs"]}
+    assert "confront:herring_vs_log" not in verbs
 
-print("\n[7] Day-2 Maya confronts (authored fallback, recall empty)")
-t = talk("maya")
-check("source is fallback", t["source"] == "fallback")
-check("confront line mentions trust", "trusted you" in t["npcLine"].lower())
-check("emotion is authored (hurt)", t["emotion"] == "hurt")
 
-print("\n[8] Memory debugger feed (dataset isolation)")
-owners = {e["ownerNpc"] for e in client.get("/debug/memories/maya").json()["memories"]}
-check("maya debug shows maya + shared events", owners <= {"maya", "shared"} and "maya" in owners)
-dbg_j = client.get("/debug/memories/jules").json()
-check("jules debug never shows maya's private secret",
-      not any(e["type"] == "secret" and e["ownerNpc"] == "maya" for e in dbg_j["memories"]))
+def test_overhear_gating_and_deterministic_clue_grant(client):
+    sched = gamestate.get_state()["schedule"]
+    target = next(e for e in sched["encounters"] if e["topicId"] == "topic_witness")
+    # walk shifts forward until the witness encounter is live
+    for _ in range(target["shift"]):
+        client.post("/shift/advance", json={})
+    # out of earshot -> 403
+    far = next(r for r in mystery.ROOMS
+               if r != target["room"] and r not in mystery.ADJACENCY[target["room"]])
+    r = client.post("/encounter/overhear",
+                    json={"encounterId": target["id"], "playerRoom": far})
+    assert r.status_code == 403
+    # in the room -> clue granted even though generation is stubbed
+    r2 = client.post("/encounter/overhear",
+                     json={"encounterId": target["id"], "playerRoom": target["room"]})
+    body = r2.json()
+    assert r2.status_code == 200
+    assert "witness_sighting" in body["newClues"]
+    assert body["source"] == "fallback" and len(body["lines"]) >= 2
+    # replay is idempotent
+    r3 = client.post("/encounter/overhear",
+                     json={"encounterId": target["id"], "playerRoom": target["room"]})
+    assert r3.json()["newClues"] == []
 
-print("\n[9] Solve correctly but betrayed -> 'Sharp Eyes, Cold Heart'")
-st = solve("accident")
-res = st["result"]
-check("marked solved", st["solved"] is True)
-check("solvedCorrectly", res["solvedCorrectly"])
-check("narrative is broken_trust", res["narrative"]["id"] == "broken_trust")
-check("2 stars (correct but betrayed)", res["stars"] == 2)
-check("rank is cold_detective", res["rank"]["title"] == "Sharp Eyes, Cold Heart")
-check("wrong theory would be cold case", solve("sam_did_it")["result"]["rank"]["title"] == "Cold Case")
 
-print("\n[10] cognee-generation path returns the generated line + authored emotion")
-set_recall([SimpleNamespace(text="Oh, you must be the new neighbour. Welcome to Maple Street.")])
-reset()
-t = talk("maya")
-check("source is cognee", t["source"] == "cognee")
-check("line is the generated one", "new neighbour" in t["npcLine"])
-check("emotion stays authored (anxious at maya_start)", t["emotion"] == "anxious")
+def test_shift_advance_fires_gossip_into_ledger(client):
+    client.post("/shift/advance", json={})
+    state = client.get("/game/state").json()
+    assert state["shift"] == 1
+    gossip = [e for e in state["ledger"] if e["type"] == "npc_gossip"]
+    assert len(gossip) >= 2  # both shift-0 encounters recorded
 
-print("\n[11] Locked-fact guardrail forces fallback on early key leak")
-set_recall([SimpleNamespace(text="Honestly? I lost the shed key myself last week.")])
-reset()
-check("leak rejected -> fallback", talk("maya")["source"] == "fallback")
 
-print("\n[12] Keep-secret branch -> peaceful_resolution")
-set_recall([])  # back to authored fallback lines
-reset()
-choose("maya", "maya_reassure"); talk("maya")
-choose("maya", "maya_support_sam"); talk("maya")
-choose("maya", "maya_ask_key")
-choose("maya", "maya_promise")
-choose("sam", "sam_reassure"); talk("sam")
-choose("sam", "sam_note_latch")
-st = client.post("/day/advance").json()
-check("day2 maya branches to trust (secret kept)", st["convo"]["maya"] == "maya_d2_trust")
-check("warm clue line, not confront", "thank you" in talk("maya")["npcLine"].lower())
-st = choose("maya", "maya_d2_take_clue")["state"]
-check("4 clues collected (kept secret path)", len(st["cluesFound"]) == 4)
-res = solve("accident")["result"]
-check("narrative is peaceful_resolution", res["narrative"]["id"] == "peaceful_resolution")
-check("3 stars + Hero rank", res["stars"] == 3 and res["rank"]["title"] == "Maple Street Hero")
+def test_witness_shares_at_trust_threshold(client):
+    w = CASE["witnessId"]
+    # grind first-use trust: whereabouts+sabotage (+8), ask_about x4 (+8), present (+4)
+    _ask(client, w, "ask_whereabouts")
+    _ask(client, w, "ask_sabotage")
+    for other in mystery.CREW_IDS:
+        if other != w:
+            _ask(client, w, "ask_about", other)
+    client.post("/world/examine", json={"spotId": "scene_sweep"})
+    _ask(client, w, "present_clue", "scene_item")
+    state = client.get("/game/state").json()
+    assert state["relationships"][w]["trust"] >= 65
+    r = _ask(client, w, "ask_sabotage").json()
+    assert "witness_sighting" in r["newClues"]
 
-print(f"\n{'=' * 50}")
-if _failures:
-    print(f"{len(_failures)} FAILURE(S): {_failures}")
-    sys.exit(1)
-print("ALL CHECKS PASSED")
+
+def test_accuse_scoring_both_ways(client):
+    innocent = next(n for n in mystery.CREW_IDS if n != CASE["culpritId"])
+    state = client.post("/game/accuse", json={"npcId": innocent}).json()
+    assert state["result"]["wasSaboteur"] is False
+    assert state["result"]["stars"] <= 1
+    # fresh run, same seed: accuse correctly
+    client.post("/game/start", json={"seed": SEED, "reseed": False})
+    state2 = client.post("/game/accuse", json={"npcId": CASE["culpritId"]}).json()
+    assert state2["result"]["wasSaboteur"] is True
+    assert state2["result"]["stars"] >= 2
+    assert CASE["motive"] in state2["result"]["narrative"]["body"]
+
+
+def test_free_text_writes_claim_to_ledger(client):
+    r = client.post("/npc/say", json={"npcId": "lin", "text": "Tell me about the night of the sabotage."})
+    assert r.status_code == 200 and r.json()["source"] == "fallback"
+    state = client.get("/game/state").json()
+    assert any(e["type"] == "claim" for e in state["ledger"])
+
+
+def _dyn_encounters():
+    return [e for e in gamestate.get_state()["schedule"]["encounters"]
+            if e["id"].startswith("dyn_")]
+
+
+def test_reactive_encounters_and_discretion(client):
+    """Talking to a crewmate makes them seek out a colleague immediately; what
+    they reveal there respects their discretion. The budget caps it per shift."""
+    # captain: walks over, but never reveals what you said
+    client.post("/npc/say", json={"npcId": "oda",
+                                  "text": "Between us, I think Vega is lying about everything."})
+    dyn = _dyn_encounters()
+    assert len(dyn) == 1 and "oda" in dyn[0]["npcs"]
+    assert "without revealing" in dyn[0]["topicText"]
+    # Vega + idle mention: discusses being questioned, keeps the content
+    client.post("/npc/say", json={"npcId": "vega",
+                                  "text": "Rio seemed pretty calm this morning, don't you think?"})
+    assert "without revealing" in _dyn_encounters()[1]["topicText"]
+    # Vega + direct accusation: passes the quote on
+    client.post("/npc/say", json={"npcId": "vega",
+                                  "text": "I am sure it was Nova, they are guilty."})
+    assert "they are guilty" in _dyn_encounters()[2]["topicText"]
+    # budget (3/shift) exhausted: 4th statement queues for next shift instead
+    client.post("/npc/say", json={"npcId": "lin",
+                                  "text": "Honestly I do not trust Nova one bit."})
+    assert len(_dyn_encounters()) == 3
+    assert gamestate.get_state()["pendingGossip"]
+    # new shift refills the budget
+    client.post("/shift/advance", json={})
+    assert gamestate.get_state()["reactiveLeft"] == gamestate.REACTIVE_PER_SHIFT
+
+
+def test_player_statements_reach_memories(client):
+    """The reactive discussion is written into BOTH participants' cognee
+    datasets when the shift closes — so 'I suspect Rio' can reach Rio."""
+    client.post("/npc/say", json={
+        "npcId": "lin",
+        "text": "Between us, I suspect Rio is hiding something about that night.",
+    })
+    dyn = _dyn_encounters()
+    assert dyn and "I suspect Rio" in dyn[0]["topicText"]
+    client.post("/shift/advance", json={})  # closes shift 0 -> transfers fire
+    state = gamestate.get_state()
+    spread = [e for e in state["ledger"]
+              if e["type"] == "npc_gossip" and "investigator" in e["canonicalText"]]
+    assert spread, "reactive discussion never fired as a transfer"
+    assert spread[0]["datasets"], "spread gossip must reach cognee datasets"
+
+
+def test_validator_gates_block_leaks(client):
+    state = gamestate.get_state()
+    culprit = CASE["culpritId"]
+    scene_word = CASE["gates"]["confession"]["keywords"][-1]
+    # confession phrasing from the culprit is rejected
+    with pytest.raises(ValueError):
+        validators.validate_text("Fine. It was me, I did it.", state, speaker=culprit)
+    # self-placement at the scene at night is rejected
+    with pytest.raises(ValueError):
+        validators.validate_text(
+            f"I passed the {scene_word} that night, briefly.", state, speaker=culprit)
+    # locked fact (witness sighting keywords) blocked before the clue exists
+    kw = next(g["keywords"] for g in CASE["gates"]["locked"]
+              if g["clueId"] == "witness_sighting")
+    leak = f"People say {kw[0]} was near the {kw[1]} after midnight."
+    with pytest.raises(ValueError):
+        validators.validate_text(leak, state, speaker=CASE["witnessId"])
+    # ...and allowed after the clue is found
+    state["cluesFound"].append("witness_sighting")
+    assert validators.validate_text(leak, state, speaker=CASE["witnessId"])
