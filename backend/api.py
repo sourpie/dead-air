@@ -79,6 +79,10 @@ class OverhearRequest(BaseModel):
     playerRoom: str
 
 
+class PrewarmRequest(BaseModel):
+    encounterId: str
+
+
 class ExamineRequest(BaseModel):
     spotId: str
 
@@ -204,6 +208,20 @@ async def shift_advance(req: AdvanceRequest):
     """Close the shift: fire its gossip transfers, open the next shift's plan."""
     r = gamestate.advance_shift(req.playerRoom)
     return {"state": gamestate.public_state(), "firedTransfers": r["firedTransfers"]}
+
+
+@app.post("/encounter/prewarm")
+async def encounter_prewarm(req: PrewarmRequest):
+    """Warm both speakers' memory-context caches as the player approaches an
+    encounter, so leaning in generates the exchange without paying the cognee
+    retrieval round trip. Fire-and-forget — returns immediately."""
+    npcs = gamestate.encounter_npcs(req.encounterId)
+    if npcs:
+        state = gamestate.get_state()
+        loop = asyncio.get_running_loop()
+        for npc_id in npcs:
+            loop.create_task(dialogue.prefetch_context(npc_id, state))
+    return {"ok": bool(npcs)}
 
 
 @app.post("/encounter/overhear")

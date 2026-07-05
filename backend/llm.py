@@ -29,6 +29,9 @@ import aiohttp
 
 _TIMEOUT = aiohttp.ClientTimeout(total=90)
 _KEEP_ALIVE = "30m"  # keep the local model resident between requests
+# Context window for Ollama. Big enough for persona + ~8 memory lines + the
+# situation + the answer; tunable for a smaller/faster model. Env-overridable.
+_OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "4096"))
 
 # Some reasoning models inline a scratchpad as <think>...</think>. Strip it.
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S)
@@ -87,7 +90,15 @@ async def _ollama_chat(system: str, user: str, max_tokens: int) -> str:
         "model": _ollama_model(),
         "stream": False,
         "keep_alive": _KEEP_ALIVE,
-        "options": {"num_predict": max_tokens},
+        "options": {
+            # Cap generation so a rambling model can't stretch a 30-45 word line
+            # into hundreds of tokens of latency.
+            "num_predict": max_tokens,
+            # Size the context to persona + memories + situation so the prompt is
+            # never silently truncated (which would drop memories) nor padded to
+            # a huge window. Keep it stable so the prompt-prefix KV cache holds.
+            "num_ctx": _OLLAMA_NUM_CTX,
+        },
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},

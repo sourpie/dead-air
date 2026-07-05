@@ -3,6 +3,7 @@
 // pair up to talk — get close to overhear. Pure React/SVG/CSS — no engine.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useGame } from '../../state/gameStore'
+import { api } from '../../api/client'
 import { NPCS } from '../../data/npcs'
 import { ROOM_INFO } from '../../data/rooms'
 import type { NpcId, RoomId } from '../../types'
@@ -19,6 +20,9 @@ import {
 
 const SPEED = 280
 const EARSHOT = 240
+// Start warming the speakers' memory caches while the player is still
+// approaching (outside earshot) so leaning in generates the exchange instantly.
+const PREWARM = EARSHOT * 2.5
 const NPC_TALK_RADIUS = 95
 
 type Facing = 'down' | 'up' | 'side'
@@ -61,6 +65,7 @@ export function MapScene() {
   const targetRef = useRef<{ x: number; y: number; spot?: Spot; npc?: NpcId } | null>(null)
   const selectedRef = useRef<NpcId | null>(null)
   const notedMissRef = useRef<Set<string>>(new Set())
+  const prewarmedRef = useRef<Set<string>>(new Set())
   selectedRef.current = selectedNpc
 
   const spots = useMemo<Spot[]>(() => {
@@ -117,8 +122,13 @@ export function MapScene() {
         for (const e of npcSim.activeEncounters()) {
           if (st.overheard.includes(e.id)) continue
           const inRoom = playerRoom === e.room
-          if (inRoom || Math.hypot(p.x - e.x, p.y - e.y) <= EARSHOT) {
+          const dist = Math.hypot(p.x - e.x, p.y - e.y)
+          if (inRoom || dist <= EARSHOT) {
             void overhearEncounter(e.id, e.room, playerRoom ?? nearestRoom(p.x, p.y))
+          } else if (dist <= PREWARM && !prewarmedRef.current.has(e.id)) {
+            // approaching but not yet in earshot: warm the speakers' caches
+            prewarmedRef.current.add(e.id)
+            void api.prewarmEncounter(e.id)
           }
         }
         // missed-encounter notes

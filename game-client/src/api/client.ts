@@ -69,6 +69,14 @@ export const api = {
       body: JSON.stringify({ encounterId, playerRoom }),
     }),
 
+  // Fire-and-forget: warm the two speakers' memory caches as the player nears an
+  // encounter so leaning in is instant. Errors are ignored (best-effort).
+  prewarmEncounter: (encounterId: string) =>
+    req<{ ok: boolean }>('/encounter/prewarm', {
+      method: 'POST',
+      body: JSON.stringify({ encounterId }),
+    }).catch(() => ({ ok: false })),
+
   examine: (spotId: string) =>
     req<ExamineResponse>('/world/examine', {
       method: 'POST',

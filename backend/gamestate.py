@@ -436,6 +436,16 @@ def advance_shift(player_room: str | None = None) -> dict:
     return {"state": state, "firedTransfers": fired}
 
 
+def encounter_npcs(encounter_id: str) -> list[str] | None:
+    """The two speakers in an encounter this shift, for pre-warming their memory
+    caches before the player is in earshot. None if it isn't a live encounter."""
+    state = _load()
+    e = simulation.find_encounter(state["schedule"], encounter_id)
+    if e is None or e["shift"] != state["shift"]:
+        return None
+    return list(e["npcs"])
+
+
 def apply_overhear(encounter_id: str, player_room: str) -> dict:
     """Validate and apply an eavesdrop: mark overheard, grant the topic clue.
     The clue grant is deterministic — line generation (interview.py) is flavor."""

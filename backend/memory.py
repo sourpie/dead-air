@@ -18,6 +18,7 @@ call cognee.prune here — the cloud tenant is shared with unrelated data;
 forget(dataset=...) is the only deletion primitive we use.
 """
 import asyncio
+import contextlib
 import os
 import pathlib
 
@@ -33,9 +34,20 @@ except Exception:  # noqa: BLE001 -- stubbed cognee (tests / devserver)
 _HERE = pathlib.Path(__file__).resolve().parent
 
 # Shared lock: serialize cognee access. The local graph store (Kuzu) is
-# single-writer with a known file-lock bug, so the API holds this around every
-# cognee call.
+# single-writer with a known file-lock bug, so we hold this around every cognee
+# call IN LOCAL MODE. Cognee Cloud is a remote service that handles concurrent
+# requests, so serializing there is pure overhead — every ~10s round trip would
+# queue behind the previous one (a talk retrieval, an overhear retrieval and a
+# background memory write would run strictly one-at-a-time). Use _cognee_lock()
+# everywhere so cloud runs get real concurrency and local runs stay safe.
 LOCK = asyncio.Lock()
+_CONNECT_LOCK = asyncio.Lock()  # guards the one-time cloud connect handshake
+
+
+def _cognee_lock():
+    """Serialize cognee access only when it talks to a local single-writer store.
+    In cloud mode return a no-op context so calls run concurrently."""
+    return contextlib.nullcontext() if config.CLOUD_MODE else LOCK
 
 # --------------------------------------------------------------------------- #
 # Capability flags (env-tunable so a quota-constrained demo can lighten the
@@ -85,15 +97,22 @@ _connected = False
 
 
 async def ensure_connected():
-    """Connect to Cognee Cloud once if configured; no-op in local mode."""
+    """Connect to Cognee Cloud once if configured; no-op in local mode.
+
+    Self-guarded: with cloud calls no longer serialized by LOCK, several may
+    reach this concurrently on the first request — the connect-lock + re-check
+    keeps cognee.serve() to a single handshake."""
     global _connected
     if _connected:
         return
-    url = os.environ.get("COGNEE_SERVICE_URL")
-    key = os.environ.get("COGNEE_API_KEY")
-    if url and key:
-        await cognee.serve(url=url, api_key=key)
-    _connected = True
+    async with _CONNECT_LOCK:
+        if _connected:
+            return
+        url = os.environ.get("COGNEE_SERVICE_URL")
+        key = os.environ.get("COGNEE_API_KEY")
+        if url and key:
+            await cognee.serve(url=url, api_key=key)
+        _connected = True
 
 
 # --------------------------------------------------------------------------- #
@@ -252,7 +271,7 @@ async def _maybe_memify(dataset: str) -> None:
 async def seed_run(seeds: dict, pause: float = 2.0) -> bool:
     """Seed one run's datasets (7): one graph-building write each, then enrich."""
     ok = True
-    async with LOCK:
+    async with _cognee_lock():
         await ensure_connected()
         items = list(seeds.items())
         for idx, (dataset, lines) in enumerate(items, 1):
@@ -271,7 +290,7 @@ async def seed_run(seeds: dict, pause: float = 2.0) -> bool:
 async def seed_lore(lines: list[str]) -> bool:
     """Seed the permanent shared lore dataset (one-time; ask.py --seed-lore)."""
     from crew import LORE_DATASET
-    async with LOCK:
+    async with _cognee_lock():
         await ensure_connected()
         return await _ingest_with_retry("\n".join(lines), LORE_DATASET,
                                         node_set_for_dataset(LORE_DATASET), rich=True)
@@ -281,7 +300,7 @@ async def forget_datasets(names: list[str]) -> dict:
     """Best-effort per-dataset deletion of a finished run. A failure is harmless:
     run-scoped names mean orphaned data is never in any future recall scope."""
     results = {}
-    async with LOCK:
+    async with _cognee_lock():
         await ensure_connected()
         for name in names:
             try:
@@ -305,7 +324,7 @@ async def remember_event(event: dict) -> bool:
     ns = node_set_for_event(event)
     importance = float(event.get("importance", 0.5))
     ok = True
-    async with LOCK:
+    async with _cognee_lock():
         await ensure_connected()
         for dataset in event.get("datasets", []):
             ok = await _ingest_with_retry(text, dataset, ns, rich=False, importance=importance) and ok
@@ -331,36 +350,41 @@ async def recall_scoped(
     One quick retry on transient network failures (flaky DNS). Anything else —
     auth errors, missing datasets — re-raises immediately; the caller serves
     the fallback line.
+
+    Locks itself (via _cognee_lock) around the cognee call so callers don't have
+    to — and so the lock is a no-op in cloud mode, letting parallel retrievals
+    (talk + overhear) actually overlap instead of queuing.
     """
     await ensure_connected()
     qtype = _search_type(beat)
     filt = node_name if (node_name and beat in _NODE_FILTERABLE) else None
     for attempt in (1, 2):
         try:
-            if GRANULAR:
+            async with _cognee_lock():
+                if GRANULAR:
+                    kwargs = dict(
+                        query_text=query, query_type=qtype, datasets=datasets,
+                        system_prompt=system_prompt, only_context=context_only, top_k=top_k,
+                        feedback_influence=FEEDBACK_INFLUENCE,
+                    )
+                    if filt:
+                        kwargs["node_name"] = filt
+                        kwargs["node_name_filter_operator"] = "OR"
+                    if session_id:
+                        kwargs["session_id"] = session_id
+                    return await cognee.search(**kwargs)
+                # Wrapper path (cloud / stub): recall() also honours query_type,
+                # session_id and feedback_influence.
                 kwargs = dict(
-                    query_text=query, query_type=qtype, datasets=datasets,
-                    system_prompt=system_prompt, only_context=context_only, top_k=top_k,
+                    query_text=query, datasets=datasets, system_prompt=system_prompt,
+                    only_context=context_only, top_k=top_k,
                     feedback_influence=FEEDBACK_INFLUENCE,
                 )
-                if filt:
-                    kwargs["node_name"] = filt
-                    kwargs["node_name_filter_operator"] = "OR"
+                if qtype is not None:
+                    kwargs["query_type"] = qtype
                 if session_id:
                     kwargs["session_id"] = session_id
-                return await cognee.search(**kwargs)
-            # Wrapper path (cloud / stub): recall() also honours query_type,
-            # session_id and feedback_influence.
-            kwargs = dict(
-                query_text=query, datasets=datasets, system_prompt=system_prompt,
-                only_context=context_only, top_k=top_k,
-                feedback_influence=FEEDBACK_INFLUENCE,
-            )
-            if qtype is not None:
-                kwargs["query_type"] = qtype
-            if session_id:
-                kwargs["session_id"] = session_id
-            return await cognee.recall(**kwargs)
+                return await cognee.recall(**kwargs)
         except Exception as e:  # noqa: BLE001
             transient = any(
                 k in type(e).__name__ for k in ("Connector", "Connection", "Timeout", "DNS")
@@ -381,7 +405,7 @@ async def reward_session(session_id: str, datasets: list[str],
     LLM-heavy → gated behind NPCMEM_FEEDBACK_LEARN. Best-effort, never raises."""
     if not (GRANULAR and FEEDBACK_LEARN and hasattr(cognee, "session") and hasattr(cognee, "improve")):
         return False
-    async with LOCK:
+    async with _cognee_lock():
         await ensure_connected()
         try:
             entries = await cognee.session.get_session(session_id=session_id, last_n=5)
@@ -406,10 +430,13 @@ async def reward_session(session_id: str, datasets: list[str],
 async def visualize_dataset(dataset: str, out_path: str) -> str | None:
     if not hasattr(cognee, "visualize_graph"):
         return None
-    async with LOCK:
+    async with _cognee_lock():
         await ensure_connected()
         try:
-            return await cognee.visualize_graph(destination_file_path=out_path, dataset=dataset)
+            # cognee returns the HTML CONTENT, not the path — it also writes
+            # the file. Hand callers the verified path.
+            await cognee.visualize_graph(destination_file_path=out_path, dataset=dataset)
+            return out_path if pathlib.Path(out_path).exists() else None
         except Exception as e:  # noqa: BLE001
             print(f"    ! visualize_graph({dataset}) failed: {type(e).__name__}: {str(e)[:100]}")
             return None
@@ -420,10 +447,11 @@ async def visualize_provenance(out_path: str) -> str | None:
     (which dataset/pipeline). A complementary view to the per-crew memory graph."""
     if not hasattr(cognee, "visualize_memory_provenance"):
         return None
-    async with LOCK:
+    async with _cognee_lock():
         await ensure_connected()
         try:
-            return await cognee.visualize_memory_provenance(destination_file_path=out_path)
+            await cognee.visualize_memory_provenance(destination_file_path=out_path)
+            return out_path if pathlib.Path(out_path).exists() else None
         except Exception as e:  # noqa: BLE001
             print(f"    ! visualize_memory_provenance failed: {type(e).__name__}: {str(e)[:100]}")
             return None
@@ -435,7 +463,7 @@ async def ask_graph(datasets: list[str], query: str, top_k: int = 8) -> str | No
     it over the graph store. GRANULAR-only (needs the local graph DB); guarded."""
     if not (GRANULAR and SearchType is not None and hasattr(SearchType, "NATURAL_LANGUAGE")):
         return None
-    async with LOCK:
+    async with _cognee_lock():
         await ensure_connected()
         try:
             res = await cognee.search(

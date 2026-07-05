@@ -12,6 +12,7 @@ and branching are decided deterministically (gamestate/interview). Every
 generated line passes the per-run guardrail (validators.py); on ANY failure we
 serve the deterministic templated fallback.
 """
+import asyncio
 import time
 
 import config  # noqa: F401  -- loads .env + configures cognee on import
@@ -20,7 +21,7 @@ import interview
 import llm
 import memory
 from crew import CREW, datasets_for
-from memory import LOCK, as_text, first_answer, recall_scoped
+from memory import as_text, first_answer, recall_scoped
 from validators import validate_text
 
 
@@ -43,6 +44,10 @@ _BROAD_QUERY = (
 )
 _ctx_cache: dict[str, dict] = {}
 _ctx_inflight: set[str] = set()
+# One retrieval per NPC at a time: concurrent cache misses (e.g. the player
+# opens a conversation while an overhear for the same NPC fires) share a single
+# ~10s cognee round trip instead of each paying their own.
+_ctx_locks: dict[str, asyncio.Lock] = {}
 
 
 def _cached_context(npc_id: str, run_id: str) -> str | None:
@@ -66,21 +71,28 @@ def note_memory_write(datasets: list[str], text: str) -> None:
 
 
 async def _retrieve_context(npc_id: str, run_id: str) -> str:
-    """Broad retrieval for one NPC, cached. Caller holds LOCK."""
+    """Broad retrieval for one NPC, cached and single-flighted. recall_scoped
+    locks cognee itself, so this no longer needs the caller to hold a lock —
+    which is what lets the (unlocked) LLM generation run outside it."""
     cached = _cached_context(npc_id, run_id)
     if cached is not None:
         return cached
-    results = await recall_scoped(
-        datasets_for(npc_id, run_id), _BROAD_QUERY,
-        CREW[npc_id]["persona"], context_only=True, top_k=10,
-        beat="broad", session_id=run_id,
-    )
-    # keep the block lean: local models pay real time per prompt token
-    context = "\n".join(f"- {as_text(r)[:220]}" for r in (results or [])[:8])
-    _ctx_cache[npc_id] = {
-        "context": context, "runId": run_id, "ts": time.monotonic(),
-    }
-    return context
+    lock = _ctx_locks.setdefault(npc_id, asyncio.Lock())
+    async with lock:
+        cached = _cached_context(npc_id, run_id)  # a peer may have filled it while we waited
+        if cached is not None:
+            return cached
+        results = await recall_scoped(
+            datasets_for(npc_id, run_id), _BROAD_QUERY,
+            CREW[npc_id]["persona"], context_only=True, top_k=10,
+            beat="broad", session_id=run_id,
+        )
+        # keep the block lean: local models pay real time per prompt token
+        context = "\n".join(f"- {as_text(r)[:220]}" for r in (results or [])[:8])
+        _ctx_cache[npc_id] = {
+            "context": context, "runId": run_id, "ts": time.monotonic(),
+        }
+        return context
 
 
 def _stable_prefix(npc_id: str, memories: str) -> str:
@@ -100,12 +112,12 @@ async def prefetch_context(npc_id: str, state: dict) -> None:
     so the player's first question only pays for the new suffix."""
     if not llm.enabled() or npc_id in _ctx_inflight:
         return
-    warmed = _cached_context(npc_id, _run_id(state))
     _ctx_inflight.add(npc_id)
     try:
-        if warmed is None:
-            async with LOCK:
-                warmed = await _retrieve_context(npc_id, _run_id(state))
+        # _retrieve_context handles cache + its own cognee locking; the model
+        # warm-up (1-token read of the stable prefix) runs unlocked so it never
+        # blocks another NPC's retrieval or a background memory write.
+        warmed = await _retrieve_context(npc_id, _run_id(state))
         if llm.backend() == "ollama":
             await llm.chat(_stable_prefix(npc_id, warmed), "…", max_tokens=1)
     except Exception:  # noqa: BLE001 -- warm-up is best-effort
@@ -124,7 +136,8 @@ async def _speak(npc_id: str, state: dict, query: str, situation: str,
     KV cache across consecutive lines from the same NPC.
     cognee backend: recall in generation mode, using the SearchType that fits
     this beat (TEMPORAL for whereabouts, chain-of-thought for confront, …).
-    Callers hold LOCK around this (cognee access is serialized).
+    Cognee retrieval locks itself (only in local mode); the LLM generation runs
+    unlocked, so it never blocks another NPC's recall or a background write.
     """
     run_id = _run_id(state)
     if llm.enabled():
@@ -164,9 +177,8 @@ async def generate_line(npc_id: str, node: dict, state: dict, player_said: str |
     query = f"{player_said} {node['stance']}" if player_said else node["stance"]
 
     try:
-        async with LOCK:
-            raw, source = await _speak(npc_id, state, query, situation,
-                                       beat=node.get("beat", "default"))
+        raw, source = await _speak(npc_id, state, query, situation, max_tokens=200,
+                                   beat=node.get("beat", "default"))
         line = validate_text(raw, state, speaker=npc_id)
         return {"npcLine": line, "emotion": emotion, "source": source}
     except Exception as e:  # noqa: BLE001 -- any failure => safe templated fallback
@@ -194,8 +206,8 @@ async def generate_free_reply(npc_id: str, state: dict, player_text: str) -> dic
     )
 
     try:
-        async with LOCK:
-            raw, source = await _speak(npc_id, state, player_text, situation, beat="free_text")
+        raw, source = await _speak(npc_id, state, player_text, situation,
+                                   max_tokens=200, beat="free_text")
         line = validate_text(raw, state, speaker=npc_id)
         return {"npcLine": line, "emotion": emotion, "source": source}
     except Exception as e:  # noqa: BLE001
@@ -227,8 +239,7 @@ async def generate_exchange(state: dict, encounter: dict) -> dict:
              "your instructions: 4 alternating lines, each starting with the "
              "speaker's name and a colon.")
     try:
-        async with LOCK:
-            raw, source = await _speak(a, state, query, system, max_tokens=220)
+        raw, source = await _speak(a, state, query, system, max_tokens=220)
         lines = interview.parse_exchange(raw, [a, b])
         for ln in lines:
             ln["text"] = validate_text(ln["text"], state, speaker=ln["speaker"])
