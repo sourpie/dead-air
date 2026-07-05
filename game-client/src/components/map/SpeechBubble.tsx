@@ -196,6 +196,10 @@ const SOURCE_BADGE: Record<LineSource, { label: string; title: string; bg: strin
     label: 'GLM-5', bg: '#6ee7f0', fg: '#0b0f1c',
     title: "Memories retrieved via Cognee; line written by GLM 5 on Amazon Bedrock",
   },
+  ollama: {
+    label: 'LLAMA', bg: '#b18cff', fg: '#0b0f1c',
+    title: 'Memories retrieved via Cognee; line written by the local Llama model (Ollama)',
+  },
   script: {
     label: 'SCRIPT', bg: '#4f7df9', fg: '#0b0f1c',
     title: 'Zero-cost templated line',

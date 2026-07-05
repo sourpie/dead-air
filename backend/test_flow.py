@@ -161,6 +161,11 @@ def test_overhear_gating_and_deterministic_clue_grant(client):
     assert r2.status_code == 200
     assert "witness_sighting" in body["newClues"]
     assert body["source"] == "fallback" and len(body["lines"]) >= 2
+    # the memory transfer fires AT overhear time (Memory Debugger updates live)
+    ledger = client.get("/game/state").json()["ledger"]
+    assert any(e["type"] == "npc_gossip"
+               and set(e.get("participants", [])) == set(target["npcs"])
+               for e in ledger), "overheard conversation must land in the ledger immediately"
     # replay is idempotent
     r3 = client.post("/encounter/overhear",
                      json={"encounterId": target["id"], "playerRoom": target["room"]})

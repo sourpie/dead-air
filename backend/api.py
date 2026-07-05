@@ -21,10 +21,17 @@ import content
 import dialogue
 import gamestate
 import interview
+import llm
 import mystery
 from crew import CREW
 
 app = FastAPI(title="DEAD AIR - Game API", version="0.3.0")
+
+
+@app.on_event("startup")
+async def _warm_local_model():
+    # Ollama: load the model into RAM before the first real line (best-effort).
+    asyncio.get_running_loop().create_task(llm.warmup())
 
 # The Vite dev server (localhost:5173) calls this API from the browser.
 app.add_middleware(
@@ -240,8 +247,12 @@ async def game_accuse(req: AccuseRequest):
 async def debug_memories(npc_id: str):
     _check_npc(npc_id)
     state = gamestate.get_state()
-    entries = [e for e in state["ledger"]
-               if e["ownerNpc"] in (npc_id, "shared") or npc_id in str(e.get("datasets", []))]
+    entries = [
+        e for e in state["ledger"]
+        if e["ownerNpc"] in (npc_id, "shared")
+        or npc_id in e.get("participants", [])
+        or any(f"npc_{npc_id}_" in d for d in e.get("datasets", []))
+    ]
     return {"npcId": npc_id, "memories": entries}
 
 

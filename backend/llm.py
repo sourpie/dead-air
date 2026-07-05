@@ -1,43 +1,51 @@
-"""Direct LLM generation via Amazon Bedrock (GLM 5) — the fast path.
+"""Direct LLM generation backends — the fast path for dialogue words.
 
-When LLM_BACKEND=bedrock, dialogue generation splits in two: cognee still does
-memory (remember + retrieval + per-NPC dataset scoping), but the WORDS are
-written by GLM 5 on Bedrock, which is much faster than cognee's recall
-generation mode and gives us model control.
+cognee always owns MEMORY (writes, retrieval, per-NPC dataset scoping); this
+module only writes the words. Two backends, chosen by LLM_BACKEND in .env:
 
-Uses the bedrock-mantle Chat Completions endpoint (the one AWS recommends)
-with Bedrock API-key auth — no SigV4, just AWS_BEARER_TOKEN_BEDROCK:
+  * ollama  — local model via the Ollama server (default llama3.1:8b).
+              Fast-inference workflow: keep_alive pins the model in RAM,
+              warmup() loads it before the first real line, num_predict caps
+              generation length, and callers put stable content (persona +
+              memories) first so Ollama's prompt-prefix KV cache kicks in for
+              consecutive lines from the same NPC.
 
-    LLM_BACKEND=bedrock
-    AWS_BEARER_TOKEN_BEDROCK=<Bedrock API key>
-    BEDROCK_REGION=ap-south-1
-    BEDROCK_MODEL_ID=zai.glm-5
+        LLM_BACKEND=ollama
+        OLLAMA_MODEL=llama3.1:8b
+        # OLLAMA_URL=http://127.0.0.1:11434   (default)
 
-Model card: https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-zai-glm-5.html
+  * bedrock — GLM 5 on Amazon Bedrock (bedrock-mantle Chat Completions,
+              API-key auth — no SigV4).
+
+        LLM_BACKEND=bedrock
+        AWS_BEARER_TOKEN_BEDROCK=<Bedrock API key>
+        BEDROCK_REGION=ap-south-1
+        BEDROCK_MODEL_ID=zai.glm-5
 """
 import os
 import re
 
 import aiohttp
 
-DEFAULT_MODEL = "zai.glm-5"
-_TIMEOUT = aiohttp.ClientTimeout(total=60)
+_TIMEOUT = aiohttp.ClientTimeout(total=90)
+_KEEP_ALIVE = "30m"  # keep the local model resident between requests
 
-# GLM is a reasoning model family; some servings inline the scratchpad as
-# <think>...</think> before the answer. Strip it defensively.
+# Some reasoning models inline a scratchpad as <think>...</think>. Strip it.
 _THINK_RE = re.compile(r"<think>.*?</think>", re.S)
 
 
+def backend() -> str | None:
+    """The active generation backend, or None → cognee generates the words."""
+    b = os.environ.get("LLM_BACKEND", "").lower()
+    if b == "ollama":
+        return "ollama"
+    if b == "bedrock" and os.environ.get("AWS_BEARER_TOKEN_BEDROCK"):
+        return "bedrock"
+    return None
+
+
 def enabled() -> bool:
-    return (
-        os.environ.get("LLM_BACKEND", "").lower() == "bedrock"
-        and bool(os.environ.get("AWS_BEARER_TOKEN_BEDROCK"))
-    )
-
-
-def _endpoint() -> str:
-    region = os.environ.get("BEDROCK_REGION", "ap-south-1")
-    return f"https://bedrock-mantle.{region}.api.aws/v1/chat/completions"
+    return backend() is not None
 
 
 def clean(text: str) -> str:
@@ -45,10 +53,62 @@ def clean(text: str) -> str:
 
 
 async def chat(system: str, user: str, max_tokens: int = 400) -> str:
-    """One non-streaming completion. Raises on any failure — callers already
-    have the validate-or-fallback contract, so errors just mean a templated line."""
+    """One non-streaming completion on the active backend. Raises on any
+    failure — callers have the validate-or-fallback contract."""
+    b = backend()
+    if b == "ollama":
+        return await _ollama_chat(system, user, max_tokens)
+    if b == "bedrock":
+        return await _bedrock_chat(system, user, max_tokens)
+    raise RuntimeError("no LLM backend configured")
+
+
+async def warmup() -> None:
+    """Load the local model into memory so the first real line is fast.
+    Called at API startup; best-effort (the model may still be downloading)."""
+    if backend() != "ollama":
+        return
+    try:
+        await _ollama_chat("You are a helpful assistant.", "hi", max_tokens=1)
+        print(f"  ollama model {_ollama_model()} warmed up")
+    except Exception as e:  # noqa: BLE001
+        print(f"  ollama warmup skipped: {type(e).__name__}: {str(e)[:80]}")
+
+
+# ── Ollama (native API: supports keep_alive + num_predict) ──────────────────
+
+def _ollama_model() -> str:
+    return os.environ.get("OLLAMA_MODEL", "llama3.1:8b")
+
+
+async def _ollama_chat(system: str, user: str, max_tokens: int) -> str:
+    url = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/") + "/api/chat"
     payload = {
-        "model": os.environ.get("BEDROCK_MODEL_ID", DEFAULT_MODEL),
+        "model": _ollama_model(),
+        "stream": False,
+        "keep_alive": _KEEP_ALIVE,
+        "options": {"num_predict": max_tokens},
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+    }
+    async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
+        async with session.post(url, json=payload) as resp:
+            if resp.status != 200:
+                body = (await resp.text())[:200]
+                raise RuntimeError(f"Ollama {resp.status}: {body}")
+            data = await resp.json()
+    return clean(data["message"]["content"])
+
+
+# ── Amazon Bedrock (GLM 5 via bedrock-mantle Chat Completions) ───────────────
+
+async def _bedrock_chat(system: str, user: str, max_tokens: int) -> str:
+    region = os.environ.get("BEDROCK_REGION", "ap-south-1")
+    url = f"https://bedrock-mantle.{region}.api.aws/v1/chat/completions"
+    payload = {
+        "model": os.environ.get("BEDROCK_MODEL_ID", "zai.glm-5"),
         "max_tokens": max_tokens,
         "messages": [
             {"role": "system", "content": system},
@@ -60,7 +120,7 @@ async def chat(system: str, user: str, max_tokens: int = 400) -> str:
         "Content-Type": "application/json",
     }
     async with aiohttp.ClientSession(timeout=_TIMEOUT) as session:
-        async with session.post(_endpoint(), json=payload, headers=headers) as resp:
+        async with session.post(url, json=payload, headers=headers) as resp:
             if resp.status != 200:
                 body = (await resp.text())[:200]
                 raise RuntimeError(f"Bedrock {resp.status}: {body}")

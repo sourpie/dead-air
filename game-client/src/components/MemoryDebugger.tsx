@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useGame } from '../state/gameStore'
 import { CREW_IDS, NPCS } from '../data/npcs'
 import type { MemoryEvent, NpcId } from '../types'
@@ -10,7 +11,15 @@ const TYPE_COLOR: Record<string, string> = {
 }
 
 export function MemoryDebugger() {
-  const { debug, toggleDebugger } = useGame()
+  const { debug, toggleDebugger, loadAllDebug } = useGame()
+
+  // live view: refresh while the panel is open (memories are written in the
+  // background — overheard conversations, claims, gossip transfers)
+  useEffect(() => {
+    void loadAllDebug()
+    const id = window.setInterval(() => void loadAllDebug(), 4000)
+    return () => window.clearInterval(id)
+  }, [loadAllDebug])
 
   return (
     <div className="fixed inset-0 z-40 flex items-end bg-grape-2/75 backdrop-blur-sm" onClick={toggleDebugger}>

@@ -64,7 +64,7 @@ def _initial_state(seed: int) -> dict:
         "cluesFound": [],
         "examined": [],
         "overheard": [],         # encounter ids the player eavesdropped
-        "firedShifts": [],       # shifts whose gossip transfers have been written
+        "firedEncounters": [],   # encounter ids whose memory transfer has been written
         "pendingGossip": [],     # statements waiting for a next-shift meeting (budget spillover)
         "reactiveLeft": REACTIVE_PER_SHIFT,  # reactive-encounter budget this shift
         "confronted": [],        # contradiction ids already used
@@ -331,47 +331,55 @@ def _claim_text(case: dict, npc_id: str) -> str:
 # Shifts, encounters, overhearing
 # --------------------------------------------------------------------------- #
 
-def _fire_shift_transfers(state: dict, shift: int) -> list[str]:
-    """Write the shift's gossip into both participants' memories (and rumours
-    if case-critical). Deterministic, independent of whether anyone overheard.
-    Small-talk encounters stay ledger-only (cost control)."""
-    if shift in state["firedShifts"]:
-        return []
-    state["firedShifts"].append(shift)
-    fired = []
+def _fire_encounter_transfer(state: dict, e: dict) -> str | None:
+    """Write ONE encounter's gossip into both participants' memories (and
+    rumours if case-critical). Fired the moment the conversation demonstrably
+    happened (overhear) or at shift close for the rest — so the Memory
+    Debugger updates live, not one shift late. Idempotent per encounter.
+    Small-talk stays ledger-only (cost control)."""
+    fired_ids = state.setdefault("firedEncounters", [])
+    if e["id"] in fired_ids:
+        return None
+    fired_ids.append(e["id"])
+    a, b = e["npcs"]
     run_id = _run_id()
+    text = (f"{mystery.CREW_NAMES[a]} and {mystery.CREW_NAMES[b]} talked in the "
+            f"{mystery.ROOMS[e['room']].lower()}. {e['topicText']}")
+    if e["topicId"].startswith("small_talk"):
+        stamped = {
+            "type": "npc_gossip", "ownerNpc": a, "participants": [a, b],
+            "canonicalText": text,
+            "source": "npc_encounter", "shift": e["shift"], "importance": 0.2,
+            "privacy": "shared", "truthStatus": "secondhand", "relatedQuest": "sabotage_k7",
+            "datasets": [], "id": f"evt_{len(state['ledger']) + 1:03d}", "writtenOk": True,
+        }
+        state["ledger"].append(stamped)
+        return stamped["id"]
+    datasets = [crew.own_dataset(a, run_id), crew.own_dataset(b, run_id)]
+    if e["critical"]:
+        datasets.append(f"{run_id}_rumours")
+    stamped = _record_event_bg({
+        "type": "npc_gossip", "ownerNpc": a, "participants": [a, b],
+        "canonicalText": text,
+        "source": "npc_encounter", "shift": e["shift"],
+        "importance": 0.7 if e["critical"] else 0.3,
+        "privacy": "shared", "truthStatus": "secondhand", "relatedQuest": "sabotage_k7",
+        "datasets": datasets,
+    })
+    return stamped["id"]
+
+
+def _fire_shift_transfers(state: dict, shift: int) -> list[str]:
+    """Fire whatever the shift's encounters haven't already fired (overheard
+    ones were written at listen time)."""
+    fired = []
     for e in state["schedule"]["encounters"]:
         if e["shift"] != shift:
             continue
-        a, b = e["npcs"]
-        datasets = []
-        if not e["topicId"].startswith("small_talk"):
-            datasets = [crew.own_dataset(a, run_id), crew.own_dataset(b, run_id)]
-            if e["critical"]:
-                datasets.append(f"{run_id}_rumours")
-        stamped = _record_event_bg({
-            "type": "npc_gossip", "ownerNpc": a,
-            "canonicalText": (f"{mystery.CREW_NAMES[a]} and {mystery.CREW_NAMES[b]} talked in the "
-                              f"{mystery.ROOMS[e['room']].lower()}. {e['topicText']}"),
-            "source": "npc_encounter", "shift": shift, "importance": 0.7 if e["critical"] else 0.3,
-            "privacy": "shared", "truthStatus": "secondhand", "relatedQuest": "sabotage_k7",
-            "datasets": datasets,
-        }) if datasets else _record_ledger_only(state, e, shift)
-        fired.append(stamped["id"])
+        eid = _fire_encounter_transfer(state, e)
+        if eid:
+            fired.append(eid)
     return fired
-
-
-def _record_ledger_only(state: dict, e: dict, shift: int) -> dict:
-    stamped = {
-        "type": "npc_gossip", "ownerNpc": e["npcs"][0],
-        "canonicalText": (f"{mystery.CREW_NAMES[e['npcs'][0]]} and {mystery.CREW_NAMES[e['npcs'][1]]} "
-                          f"chatted in the {mystery.ROOMS[e['room']].lower()}. {e['topicText']}"),
-        "source": "npc_encounter", "shift": shift, "importance": 0.2,
-        "privacy": "shared", "truthStatus": "secondhand", "relatedQuest": "sabotage_k7",
-        "datasets": [], "id": f"evt_{len(state['ledger']) + 1:03d}", "writtenOk": True,
-    }
-    state["ledger"].append(stamped)
-    return stamped
 
 
 def _attach_pending_gossip(state: dict, shift: int) -> None:
@@ -443,6 +451,9 @@ def apply_overhear(encounter_id: str, player_room: str) -> dict:
         note = f"Overheard ({mystery.ROOMS[e['room']]}): {e['topicText']}"
         if note not in state["notebook"]:
             state["notebook"].append(note)
+        # the conversation demonstrably happened — write the memories NOW so
+        # the Memory Debugger reflects it immediately
+        _fire_encounter_transfer(state, e)
     _save()
     return {"state": state, "encounter": e, "newClues": new_clues}
 

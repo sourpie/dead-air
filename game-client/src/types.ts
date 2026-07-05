@@ -86,7 +86,7 @@ export interface Result {
   narrative: { id: string; headline: string; body: string }
 }
 
-export type LineSource = 'cognee' | 'bedrock' | 'fallback' | 'script'
+export type LineSource = 'cognee' | 'bedrock' | 'ollama' | 'fallback' | 'script'
 
 export interface TalkResponse {
   npcId: NpcId

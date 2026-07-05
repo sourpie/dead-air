@@ -74,44 +74,63 @@ async def _retrieve_context(npc_id: str, run_id: str) -> str:
         datasets_for(npc_id, run_id), _BROAD_QUERY,
         CREW[npc_id]["persona"], context_only=True, top_k=10,
     )
-    context = "\n".join(f"- {as_text(r)}" for r in (results or [])[:12])
+    # keep the block lean: local models pay real time per prompt token
+    context = "\n".join(f"- {as_text(r)[:220]}" for r in (results or [])[:8])
     _ctx_cache[npc_id] = {
         "context": context, "runId": run_id, "ts": time.monotonic(),
     }
     return context
 
 
+def _stable_prefix(npc_id: str, memories: str) -> str:
+    """The byte-stable head of every prompt for this NPC (persona + memories).
+    MUST be constructed identically everywhere so Ollama's prompt-prefix KV
+    cache hits across requests."""
+    return (
+        f"{CREW[npc_id]['persona']}\n\n"
+        "Your memories (the ONLY things you know — do not invent facts beyond "
+        f"these):\n{memories or '- (nothing relevant comes to mind)'}"
+    )
+
+
 async def prefetch_context(npc_id: str, state: dict) -> None:
-    """Fire-and-forget cache warm-up (called when a conversation opens)."""
+    """Fire-and-forget warm-up when a conversation opens: fetch the memories
+    AND make the local model pre-read the stable prefix (1-token generation),
+    so the player's first question only pays for the new suffix."""
     if not llm.enabled() or npc_id in _ctx_inflight:
         return
-    if _cached_context(npc_id, _run_id(state)) is not None:
-        return
+    warmed = _cached_context(npc_id, _run_id(state))
     _ctx_inflight.add(npc_id)
     try:
-        async with LOCK:
-            await _retrieve_context(npc_id, _run_id(state))
+        if warmed is None:
+            async with LOCK:
+                warmed = await _retrieve_context(npc_id, _run_id(state))
+        if llm.backend() == "ollama":
+            await llm.chat(_stable_prefix(npc_id, warmed), "…", max_tokens=1)
     except Exception:  # noqa: BLE001 -- warm-up is best-effort
         pass
     finally:
         _ctx_inflight.discard(npc_id)
 
 
-async def _speak(npc_id: str, state: dict, query: str, system: str, max_tokens: int = 400):
+async def _speak(npc_id: str, state: dict, query: str, situation: str,
+                 max_tokens: int = 400):
     """Generate one reply. Returns (raw_text, source).
 
-    bedrock backend: cached cognee memories + GLM 5 generation.
+    llm backends (ollama/bedrock): cached cognee memories + direct generation.
+    The prompt is ordered STABLE-FIRST — persona, then memories, then the
+    per-request situation — so local backends (Ollama) reuse the prompt-prefix
+    KV cache across consecutive lines from the same NPC.
     cognee backend: recall generation mode does retrieval + generation server-side.
     Callers hold LOCK around this (cognee access is serialized).
     """
     run_id = _run_id(state)
     if llm.enabled():
         memories = await _retrieve_context(npc_id, run_id)
-        grounded = (
-            f"{system}\n\nYour memories (the ONLY things you know — do not invent "
-            f"facts beyond these):\n{memories or '- (nothing relevant comes to mind)'}"
-        )
-        return await llm.chat(grounded, query, max_tokens=max_tokens), "bedrock"
+        # every prompt for this NPC starts with the same bytes -> KV cache hit
+        system = f"{_stable_prefix(npc_id, memories)}\n\n{situation}"
+        return await llm.chat(system, query, max_tokens=max_tokens), llm.backend()
+    system = f"{CREW[npc_id]['persona']}\n\n{situation}"
     results = await recall_scoped(datasets_for(npc_id, run_id), query, system)
     return first_answer(results), "cognee"
 
@@ -123,13 +142,11 @@ async def generate_line(npc_id: str, node: dict, state: dict, player_said: str |
     included in the prompt AND the recall query so the line actually answers
     what was asked instead of monologuing the stance.
     """
-    npc = CREW[npc_id]
     rel = state["relationships"][npc_id]
     emotion = node.get("emotion", "neutral")
 
     said = f'The investigator just said to you: "{player_said}"\n' if player_said else ""
-    system = (
-        f"{npc['persona']}\n\n"
+    situation = (
         f"Your current situation (do not quote this verbatim): {node['stance']}\n"
         f"Your feelings toward the investigator right now: trust {rel['trust']}/100, "
         f"suspicion {rel['suspicion']}/100.\n"
@@ -145,7 +162,7 @@ async def generate_line(npc_id: str, node: dict, state: dict, player_said: str |
 
     try:
         async with LOCK:
-            raw, source = await _speak(npc_id, state, query, system)
+            raw, source = await _speak(npc_id, state, query, situation)
         line = validate_text(raw, state, speaker=npc_id)
         return {"npcLine": line, "emotion": emotion, "source": source}
     except Exception as e:  # noqa: BLE001 -- any failure => safe templated fallback
@@ -155,13 +172,11 @@ async def generate_line(npc_id: str, node: dict, state: dict, player_said: str |
 
 async def generate_free_reply(npc_id: str, state: dict, player_text: str) -> dict:
     """Answer a free-typed investigator line from the NPC's memories."""
-    npc = CREW[npc_id]
     rel = state["relationships"][npc_id]
     pressure = interview._pressure(state, npc_id)
     emotion = content.emotion_for(npc_id, "free_text", pressure)
 
-    system = (
-        f"{npc['persona']}\n\n"
+    situation = (
         f"Context: the {state['case']['sabotage']['name']} was sabotaged last night and "
         f"an investigator is questioning the crew.\n"
         f"Your feelings toward the investigator right now: trust {rel['trust']}/100, "
@@ -176,7 +191,7 @@ async def generate_free_reply(npc_id: str, state: dict, player_text: str) -> dic
 
     try:
         async with LOCK:
-            raw, source = await _speak(npc_id, state, player_text, system)
+            raw, source = await _speak(npc_id, state, player_text, situation)
         line = validate_text(raw, state, speaker=npc_id)
         return {"npcLine": line, "emotion": emotion, "source": source}
     except Exception as e:  # noqa: BLE001
@@ -209,7 +224,7 @@ async def generate_exchange(state: dict, encounter: dict) -> dict:
              "speaker's name and a colon.")
     try:
         async with LOCK:
-            raw, source = await _speak(a, state, query, system, max_tokens=300)
+            raw, source = await _speak(a, state, query, system, max_tokens=220)
         lines = interview.parse_exchange(raw, [a, b])
         for ln in lines:
             ln["text"] = validate_text(ln["text"], state, speaker=ln["speaker"])

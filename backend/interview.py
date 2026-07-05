@@ -149,15 +149,16 @@ def synth_node(state: dict, npc_id: str, verb: str, arg: str | None) -> dict:
 # --------------------------------------------------------------------------- #
 
 def exchange_prompt(encounter: dict) -> str:
+    """The SITUATION half of an overhear prompt — dialogue._speak prepends the
+    first speaker's persona + memories (the same stable prefix as normal
+    conversation, so local backends reuse the KV cache)."""
     a, b = encounter["npcs"]
     return (
-        "You are writing a short conversation between two space-station crewmates, "
-        "overheard by someone nearby. The speakers:\n"
-        f"- {FIRST_NAMES[a]}: {CREW[a]['personaShort']}\n"
-        f"- {FIRST_NAMES[b]}: {CREW[b]['personaShort']}\n"
-        f"The substance that passes between them (you must convey this, in their voices): "
+        f"You run into {FIRST_NAMES[b]} ({CREW[b]['personaShort']}) and talk "
+        f"privately, unaware an investigator may be in earshot.\n"
+        f"What passes between you (convey this substance in your own voices): "
         f"{encounter['topicText']}\n"
-        f"Write EXACTLY 4 lines of dialogue, alternating speakers, in this format:\n"
+        f"Write out the conversation as EXACTLY 4 alternating lines in this format:\n"
         f"{FIRST_NAMES[a]}: <line>\n{FIRST_NAMES[b]}: <line>\n"
         f"{FIRST_NAMES[a]}: <line>\n{FIRST_NAMES[b]}: <line>\n"
         "Each line under 20 words, natural and in-character. No narration, no extra text."
