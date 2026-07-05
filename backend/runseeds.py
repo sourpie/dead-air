@@ -60,9 +60,13 @@ def build_seeds(case: dict) -> dict:
     sab = case["sabotage"]
     scene_name = ROOMS[sab["room"]].lower()
 
+    # Absolute date anchor so temporal_cognify can place the night's events on a
+    # real timeline (Event/Timestamp nodes) rather than bare times-of-day.
+    incident_date = "2149-03-12"
     morning_after = (
-        f"This morning the {sab['name']} in the {scene_name} was found deliberately "
-        f"sabotaged. An investigator arrived on the shuttle. The whole crew is on edge."
+        f"On the morning of {incident_date}, the {sab['name']} in the {scene_name} was "
+        f"found deliberately sabotaged during the night of {incident_date}. An "
+        f"investigator arrived on the shuttle. The whole crew is on edge."
     )
 
     seeds: dict[str, list[str]] = {}

@@ -20,6 +20,11 @@ _HERE = pathlib.Path(__file__).resolve().parent
 # Load env vars (LLM_*/EMBEDDING_*/COGNEE_*) before importing cognee.
 load_dotenv(_HERE / ".env")
 
+# cognee runs a blocking 30s LLM reachability pre-flight before every pipeline
+# (add/cognify). On a flaky link that stalls startup; the real calls still run
+# (and fall back on error), so skip the probe unless explicitly re-enabled.
+os.environ.setdefault("COGNEE_SKIP_CONNECTION_TEST", "true")
+
 import cognee  # noqa: E402  (must come after load_dotenv)
 
 CLOUD_MODE = bool(os.environ.get("COGNEE_SERVICE_URL") and os.environ.get("COGNEE_API_KEY"))

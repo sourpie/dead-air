@@ -195,7 +195,11 @@ def public_state() -> dict:
 # --------------------------------------------------------------------------- #
 
 async def _write_event_bg(stamped: dict) -> None:
-    stamped["writtenOk"] = await memory.remember_event(stamped)
+    try:
+        stamped["writtenOk"] = await memory.remember_event(stamped)
+    except Exception as e:  # noqa: BLE001 -- background write; ledger already recorded
+        stamped["writtenOk"] = False
+        print(f"    ! remember_event({stamped.get('id')}) failed: {type(e).__name__}: {str(e)[:100]}")
     _save()
 
 
@@ -206,6 +210,7 @@ def _record_event_bg(event: dict) -> dict:
     stamped = dict(event)
     stamped["id"] = f"evt_{len(state['ledger']) + 1:03d}"
     stamped["writtenOk"] = None
+    stamped["nodeSet"] = memory.node_set_for_event(stamped)  # the cognee tags written
     state["ledger"].append(stamped)
     _save()
     if stamped.get("datasets"):
@@ -370,6 +375,7 @@ def _record_ledger_only(state: dict, e: dict, shift: int) -> dict:
         "privacy": "shared", "truthStatus": "secondhand", "relatedQuest": "sabotage_k7",
         "datasets": [], "id": f"evt_{len(state['ledger']) + 1:03d}", "writtenOk": True,
     }
+    stamped["nodeSet"] = memory.node_set_for_event(stamped)
     state["ledger"].append(stamped)
     return stamped
 
@@ -595,4 +601,12 @@ def accuse(npc_id: str) -> dict:
     state["solved"] = result["solvedCorrectly"]
     state["result"] = result
     _save()
+    if result["solvedCorrectly"]:
+        # Self-improving memory: reward this run's recall session so its graph
+        # edges gain feedback weight (best-effort, gated, background).
+        try:
+            asyncio.get_running_loop().create_task(
+                memory.reward_session(_run_id(), state["run"]["datasets"]))
+        except RuntimeError:
+            pass
     return state

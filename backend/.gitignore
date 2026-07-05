@@ -3,5 +3,6 @@
 .cognee_system/
 .cognee_data/
 game_state.json
+.graphs/
 __pycache__/
 *.pyc

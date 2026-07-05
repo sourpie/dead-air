@@ -73,6 +73,7 @@ async def _retrieve_context(npc_id: str, run_id: str) -> str:
     results = await recall_scoped(
         datasets_for(npc_id, run_id), _BROAD_QUERY,
         CREW[npc_id]["persona"], context_only=True, top_k=10,
+        beat="broad", session_id=run_id,
     )
     context = "\n".join(f"- {as_text(r)}" for r in (results or [])[:12])
     _ctx_cache[npc_id] = {
@@ -97,11 +98,13 @@ async def prefetch_context(npc_id: str, state: dict) -> None:
         _ctx_inflight.discard(npc_id)
 
 
-async def _speak(npc_id: str, state: dict, query: str, system: str, max_tokens: int = 400):
+async def _speak(npc_id: str, state: dict, query: str, system: str,
+                 max_tokens: int = 400, beat: str = "default"):
     """Generate one reply. Returns (raw_text, source).
 
     bedrock backend: cached cognee memories + GLM 5 generation.
-    cognee backend: recall generation mode does retrieval + generation server-side.
+    cognee backend: recall in generation mode, using the SearchType that fits
+    this beat (TEMPORAL for whereabouts, chain-of-thought for confront, …).
     Callers hold LOCK around this (cognee access is serialized).
     """
     run_id = _run_id(state)
@@ -112,7 +115,8 @@ async def _speak(npc_id: str, state: dict, query: str, system: str, max_tokens: 
             f"facts beyond these):\n{memories or '- (nothing relevant comes to mind)'}"
         )
         return await llm.chat(grounded, query, max_tokens=max_tokens), "bedrock"
-    results = await recall_scoped(datasets_for(npc_id, run_id), query, system)
+    results = await recall_scoped(datasets_for(npc_id, run_id), query, system,
+                                  beat=beat, session_id=run_id)
     return first_answer(results), "cognee"
 
 
@@ -145,7 +149,8 @@ async def generate_line(npc_id: str, node: dict, state: dict, player_said: str |
 
     try:
         async with LOCK:
-            raw, source = await _speak(npc_id, state, query, system)
+            raw, source = await _speak(npc_id, state, query, system,
+                                       beat=node.get("beat", "default"))
         line = validate_text(raw, state, speaker=npc_id)
         return {"npcLine": line, "emotion": emotion, "source": source}
     except Exception as e:  # noqa: BLE001 -- any failure => safe templated fallback
@@ -176,7 +181,7 @@ async def generate_free_reply(npc_id: str, state: dict, player_text: str) -> dic
 
     try:
         async with LOCK:
-            raw, source = await _speak(npc_id, state, player_text, system)
+            raw, source = await _speak(npc_id, state, player_text, system, beat="free_text")
         line = validate_text(raw, state, speaker=npc_id)
         return {"npcLine": line, "emotion": emotion, "source": source}
     except Exception as e:  # noqa: BLE001
