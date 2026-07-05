@@ -137,10 +137,14 @@ def synth_node(state: dict, npc_id: str, verb: str, arg: str | None) -> dict:
 
     verb_kind = verb
     fallback = content.FALLBACK_LINES[npc_id][verb_kind].format(**slots)
+    # Beat -> SearchType (memory.recall_scoped): whereabouts wants time-aware
+    # retrieval, a confrontation wants multi-hop chain-of-thought over the graph.
+    beat = {"ask_whereabouts": "whereabouts", "confront": "confront"}.get(verb, "default")
     return {
         "stance": stance,
         "fallback": fallback,
         "emotion": content.emotion_for(npc_id, verb_kind, pressure),
+        "beat": beat,
     }
 
 

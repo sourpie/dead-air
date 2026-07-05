@@ -11,17 +11,21 @@ Every response goes through gamestate.public_state() — the redaction boundary
 that keeps the culprit, the lies, the gates and unfired gossip server-side.
 """
 import asyncio
+import pathlib
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 import config  # noqa: F401  -- loads .env + sets cognee dirs on import
 import content
+import crew
 import dialogue
 import gamestate
 import interview
 import llm
+import memory
 import mystery
 from crew import CREW
 
@@ -258,7 +262,66 @@ async def debug_memories(npc_id: str):
 
 @app.get("/debug/datasets")
 async def debug_datasets():
-    """Watch per-run dataset lifecycle (forget is best-effort by design)."""
+    """Watch per-run dataset lifecycle + which cognee capabilities are live."""
     state = gamestate.get_state()
-    return {"runId": state["run"]["runId"], "seeding": state["run"]["seeding"],
-            "datasets": state["run"]["datasets"]}
+    return {
+        "runId": state["run"]["runId"], "seeding": state["run"]["seeding"],
+        "datasets": state["run"]["datasets"],
+        "features": {
+            "granular": memory.GRANULAR,      # add()+cognify()+search() graph pipeline
+            "temporal": memory.TEMPORAL,      # temporal_cognify -> Event/Timestamp nodes
+            "ontology": memory.ONTOLOGY,      # OWL grounding (ontology_valid)
+            "memify": memory.MEMIFY,          # post-seed enrichment
+            "feedbackInfluence": memory.FEEDBACK_INFLUENCE,
+            "feedbackLearn": memory.FEEDBACK_LEARN,
+            "searchTypes": {"whereabouts": "TEMPORAL", "confront": "GRAPH_COMPLETION_COT",
+                            "free_text": "HYBRID_COMPLETION", "default": "GRAPH_COMPLETION"},
+        },
+    }
+
+
+_GRAPH_DIR = pathlib.Path(__file__).resolve().parent / ".graphs"
+
+
+@app.get("/debug/graph/{npc_id}", response_class=HTMLResponse)
+async def debug_graph(npc_id: str):
+    """Render cognee's own knowledge-graph visualisation of one crewmate's
+    memory dataset — the entities + relations cognify extracted, grounded by the
+    ontology. The demo money-shot: see who-knows-what as an actual graph."""
+    _check_npc(npc_id)
+    state = gamestate.get_state()
+    dataset = crew.own_dataset(npc_id, state["run"]["runId"])
+    _GRAPH_DIR.mkdir(exist_ok=True)
+    out = _GRAPH_DIR / f"graph_{npc_id}.html"
+    path = await memory.visualize_dataset(dataset, str(out))
+    if not path or not pathlib.Path(path).exists():
+        raise HTTPException(status_code=503,
+                            detail="Graph visualisation unavailable (not seeded, or cloud mode).")
+    return HTMLResponse(pathlib.Path(path).read_text())
+
+
+@app.get("/debug/provenance", response_class=HTMLResponse)
+async def debug_provenance():
+    """cognee's memory-provenance graph — where every memory came from."""
+    _GRAPH_DIR.mkdir(exist_ok=True)
+    out = _GRAPH_DIR / "provenance.html"
+    path = await memory.visualize_provenance(str(out))
+    if not path or not pathlib.Path(path).exists():
+        raise HTTPException(status_code=503, detail="Provenance graph unavailable.")
+    return HTMLResponse(pathlib.Path(path).read_text())
+
+
+class AskGraphRequest(BaseModel):
+    query: str
+
+
+@app.post("/debug/ask")
+async def debug_ask(req: AskGraphRequest):
+    """Investigator console: ask the station's memory graph in natural language
+    (cognee NL -> Cypher). Read-only debug tool, scoped to this run's datasets."""
+    q = req.query.strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Empty query")
+    state = gamestate.get_state()
+    answer = await memory.ask_graph(state["run"]["datasets"], q)
+    return {"query": q, "answer": answer or "(no answer — graph query unavailable in this mode)"}

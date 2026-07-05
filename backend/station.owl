@@ -1,0 +1,95 @@
+<?xml version="1.0"?>
+<!--
+  DEAD AIR — station K-7 domain ontology.
+
+  Supplied to cognee.cognify(config={"ontology_config": {"ontology_resolver":
+  RDFLibOntologyResolver(ontology_file="station.owl", ...)}}). The resolver
+  validates LLM-extracted entities/relations against these classes + properties
+  and stamps each grounded graph node with ontology_valid=True — so recall is
+  anchored to the real station world instead of whatever the model imagines
+  (the design doc's Risk 1: confabulated crew, rooms, and events).
+-->
+<rdf:RDF
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#"
+    xmlns:owl="http://www.w3.org/2002/07/owl#"
+    xmlns="https://deadair.k7/station#"
+    xml:base="https://deadair.k7/station">
+
+  <owl:Ontology rdf:about="https://deadair.k7/station"/>
+
+  <!-- ===================== Classes ===================== -->
+  <owl:Class rdf:about="#CrewMember"/>
+  <owl:Class rdf:about="#Room"/>
+  <owl:Class rdf:about="#Station">
+    <rdfs:comment>A crewed orbital research station.</rdfs:comment>
+  </owl:Class>
+  <owl:Class rdf:about="#System">
+    <rdfs:comment>A sabotage-able station system (coolant, cryo, antenna, reclaimer).</rdfs:comment>
+  </owl:Class>
+  <owl:Class rdf:about="#Item">
+    <rdfs:comment>A departmental personal item that can be left at a scene.</rdfs:comment>
+  </owl:Class>
+  <owl:Class rdf:about="#Event">
+    <rdfs:comment>Something that happened at a time and place (sighting, sabotage, excursion).</rdfs:comment>
+  </owl:Class>
+  <owl:Class rdf:about="#Motive"/>
+  <owl:Class rdf:about="#Rumour"/>
+
+  <!-- ===================== Object properties ===================== -->
+  <owl:ObjectProperty rdf:about="#wasIn">
+    <rdfs:domain rdf:resource="#CrewMember"/>
+    <rdfs:range rdf:resource="#Room"/>
+  </owl:ObjectProperty>
+  <owl:ObjectProperty rdf:about="#saw">
+    <rdfs:domain rdf:resource="#CrewMember"/>
+    <rdfs:range rdf:resource="#CrewMember"/>
+  </owl:ObjectProperty>
+  <owl:ObjectProperty rdf:about="#owns">
+    <rdfs:domain rdf:resource="#CrewMember"/>
+    <rdfs:range rdf:resource="#Item"/>
+  </owl:ObjectProperty>
+  <owl:ObjectProperty rdf:about="#sabotaged">
+    <rdfs:domain rdf:resource="#CrewMember"/>
+    <rdfs:range rdf:resource="#System"/>
+  </owl:ObjectProperty>
+  <owl:ObjectProperty rdf:about="#hasMotive">
+    <rdfs:domain rdf:resource="#CrewMember"/>
+    <rdfs:range rdf:resource="#Motive"/>
+  </owl:ObjectProperty>
+  <owl:ObjectProperty rdf:about="#toldRumour">
+    <rdfs:domain rdf:resource="#CrewMember"/>
+    <rdfs:range rdf:resource="#Rumour"/>
+  </owl:ObjectProperty>
+  <owl:ObjectProperty rdf:about="#locatedIn">
+    <rdfs:domain rdf:resource="#System"/>
+    <rdfs:range rdf:resource="#Room"/>
+  </owl:ObjectProperty>
+  <owl:ObjectProperty rdf:about="#adjacentTo">
+    <rdfs:domain rdf:resource="#Room"/>
+    <rdfs:range rdf:resource="#Room"/>
+  </owl:ObjectProperty>
+
+  <!-- ===================== Named individuals: crew ===================== -->
+  <owl:NamedIndividual rdf:about="#Oda"><rdf:type rdf:resource="#CrewMember"/><rdfs:label>Captain Oda</rdfs:label></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#Vega"><rdf:type rdf:resource="#CrewMember"/><rdfs:label>Engineer Vega</rdfs:label></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#Lin"><rdf:type rdf:resource="#CrewMember"/><rdfs:label>Medic Lin</rdfs:label></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#Rio"><rdf:type rdf:resource="#CrewMember"/><rdfs:label>Comms Officer Rio</rdfs:label></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#Nova"><rdf:type rdf:resource="#CrewMember"/><rdfs:label>Science Chief Nova</rdfs:label></owl:NamedIndividual>
+
+  <!-- ===================== Named individuals: rooms ===================== -->
+  <owl:NamedIndividual rdf:about="#Cafeteria"><rdf:type rdf:resource="#Room"/></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#MedBay"><rdf:type rdf:resource="#Room"/></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#EngineRoom"><rdf:type rdf:resource="#Room"/></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#Storage"><rdf:type rdf:resource="#Room"/></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#Comms"><rdf:type rdf:resource="#Room"/></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#Quarters"><rdf:type rdf:resource="#Room"/></owl:NamedIndividual>
+
+  <!-- ===================== Named individuals: systems ===================== -->
+  <owl:NamedIndividual rdf:about="#CoolantRegulator"><rdf:type rdf:resource="#System"/></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#CryoStorage"><rdf:type rdf:resource="#System"/></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#Antenna"><rdf:type rdf:resource="#System"/></owl:NamedIndividual>
+  <owl:NamedIndividual rdf:about="#WaterReclaimer"><rdf:type rdf:resource="#System"/></owl:NamedIndividual>
+
+  <owl:NamedIndividual rdf:about="#K7"><rdf:type rdf:resource="#Station"/><rdfs:label>Station K-7</rdfs:label></owl:NamedIndividual>
+</rdf:RDF>

@@ -157,5 +157,6 @@ export interface MemoryEvent {
   truthStatus: string
   relatedQuest: string
   datasets: string[]
+  nodeSet?: string[] // cognee node_set tags this memory was written with
   writtenOk?: boolean | null
 }

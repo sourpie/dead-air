@@ -83,4 +83,34 @@ export const api = {
 
   debugMemories: (npcId: NpcId) =>
     req<{ npcId: NpcId; memories: MemoryEvent[] }>(`/debug/memories/${npcId}`),
+
+  // Which cognee capabilities are live this run (shown to judges in the debugger).
+  debugDatasets: () =>
+    req<{
+      runId: string
+      seeding: string
+      datasets: string[]
+      features: {
+        granular: boolean
+        temporal: boolean
+        ontology: boolean
+        memify: boolean
+        feedbackInfluence: number
+        feedbackLearn: boolean
+        searchTypes: Record<string, string>
+      }
+    }>('/debug/datasets'),
+
+  // cognee's own knowledge-graph render of one crewmate's memory dataset.
+  graphUrl: (npcId: NpcId) => `${BASE_URL}/debug/graph/${npcId}`,
+
+  // cognee's memory-provenance graph (where memories came from).
+  provenanceUrl: () => `${BASE_URL}/debug/provenance`,
+
+  // Investigator console: ask the station's memory graph in natural language.
+  askGraph: (query: string) =>
+    req<{ query: string; answer: string }>('/debug/ask', {
+      method: 'POST',
+      body: JSON.stringify({ query }),
+    }),
 }
