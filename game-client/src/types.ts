@@ -1,102 +1,161 @@
-// Shared types mirroring the FastAPI backend JSON (plan §6/§7/§8).
+// Shared types mirroring the DEAD AIR FastAPI backend JSON.
 
-export type NpcId = 'maya' | 'sam' | 'jules'
-export type LocationId = 'bakery' | 'garden' | 'teastall'
+export type NpcId = 'oda' | 'vega' | 'lin' | 'rio' | 'nova'
+export type RoomId = 'cafeteria' | 'medbay' | 'engine' | 'storage' | 'comms' | 'quarters'
 
 export interface Relationship {
   trust: number
   suspicion: number
 }
 
-export interface GameState {
-  day: number
-  location: LocationId
-  relationships: Record<NpcId, Relationship>
-  flags: Record<string, boolean>
-  notebook: string[]
-  cluesFound: string[]
-  ledger: MemoryEvent[]
-  convo: Record<NpcId, string>
-  solved: boolean | null
-  result: Result | null
+// One button in the question menu (built server-side from the case).
+export interface Verb {
+  id: string
+  verb: 'ask_whereabouts' | 'ask_sabotage' | 'ask_about' | 'present_clue' | 'confront'
+  arg: string | null
+  label: string
 }
 
-export interface Clue {
+export interface Move {
+  npcId: NpcId
+  atSec: number
+  toRoom: RoomId
+}
+
+export interface EncounterPlan {
+  id: string
+  room: RoomId
+  npcs: [NpcId, NpcId]
+  startSec: number
+  endSec: number
+}
+
+export interface ShiftPlan {
+  shift: number
+  shiftName: string
+  shiftSeconds: number
+  positions: Record<NpcId, RoomId>
+  moves: Move[]
+  encounters: EncounterPlan[]
+}
+
+export interface ClueCatalogEntry {
   id: string
   title: string
   icon: string
   hint: string
+  found?: string // present once collected
 }
 
-export interface Theory {
-  id: string
-  text: string
-}
-
-export interface Catalog {
-  clues: Clue[]
-  theories: Theory[]
+export interface GameState {
+  runId: string
+  seeding: string
+  shift: number
+  maxShifts: number
+  shiftName: string
+  shiftPlan: ShiftPlan
+  playerRoom: RoomId
+  sabotage: { name: string; room: RoomId; time: string }
+  relationships: Record<NpcId, Relationship>
+  flustered: Record<NpcId, number>
+  statements: Partial<Record<NpcId, string>>
+  notebook: string[]
+  cluesFound: string[]
+  clueCatalog: ClueCatalogEntry[]
+  examined: string[]
+  overheard: string[]
+  ledger: MemoryEvent[]
+  solved: boolean | null
+  result: Result | null
 }
 
 export interface Result {
+  accused: NpcId
+  accusedName: string
+  saboteur: NpcId
+  saboteurName: string
+  wasSaboteur: boolean
   solvedCorrectly: boolean
-  chosenTheory: string
-  correctTheory: string
-  correctText: string
   score: number
   stars: number
   maxStars: number
   cluesFound: number
   totalClues: number
-  betrayed: boolean
+  flustered: number
   rank: { title: string; icon: string; blurb: string }
-  narrative: Ending
+  narrative: { id: string; headline: string; body: string }
 }
 
-export interface Choice {
-  id: string
-  text: string
-}
+export type LineSource = 'cognee' | 'bedrock' | 'fallback' | 'script'
 
 export interface TalkResponse {
   npcId: NpcId
   name: string
-  nodeId: string
   npcLine: string
   emotion: string
-  source: 'cognee' | 'fallback'
-  choices: Choice[]
+  source: LineSource
+  verbs: Verb[]
   relationship: Relationship
-  day: number
+  shift: number
 }
 
-// A structured memory event (plan §6) as surfaced by /debug/memories/{npcId}.
+export interface AskResponse {
+  npcId: NpcId
+  name: string
+  npcLine: string
+  emotion: string
+  source: LineSource
+  verbs: Verb[]
+  relationship: Relationship
+  newClues: string[]
+  newStatements: NpcId[]
+  state: GameState
+}
+
+export interface SayResponse {
+  npcId: NpcId
+  name: string
+  npcLine: string
+  emotion: string
+  source: LineSource
+  relationship: Relationship
+  state: GameState
+}
+
+export interface OverhearResponse {
+  encounterId: string
+  lines: Array<{ speaker: NpcId; text: string }>
+  source: LineSource
+  newClues: string[]
+  state: GameState
+}
+
+export interface ExamineResponse {
+  state: GameState
+  newClues: string[]
+  title: string
+  text: string
+  doorLog?: Array<{ time: string; npc: string; kind: string; room: string; corrupted: boolean }>
+}
+
+export interface Catalog {
+  crew: Array<{ id: NpcId; name: string; post: RoomId }>
+  rooms: Record<RoomId, string>
+  adjacency: Record<RoomId, RoomId[]>
+}
+
+// A structured memory event as surfaced in state.ledger / /debug/memories.
 export interface MemoryEvent {
   id: string
-  type: 'promise' | 'secret' | 'gossip' | 'betrayal' | 'clue' | 'claim'
+  type: 'npc_gossip' | 'claim' | 'confrontation' | 'clue'
   ownerNpc: NpcId | 'shared'
   canonicalText: string
   source: string
-  day: number
+  shift: number
   importance: number
   privacy: string
   truthStatus: string
   relatedQuest: string
   datasets: string[]
-  writtenOk?: boolean
-}
-
-export interface Ending {
-  id: string
-  title: string
-  mystery: string
-  relationship: string
-  memory: string
-}
-
-export interface LocationInfo {
-  id: LocationId
-  name: string
-  blurb: string
-  npc: NpcId
+  writtenOk?: boolean | null
 }

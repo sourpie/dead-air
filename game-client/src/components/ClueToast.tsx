@@ -22,8 +22,8 @@ function Toast({ id, icon, title }: { id: number; icon: string; title: string })
     <div className="animate-toast gcard flex w-72 items-center gap-3 px-4 py-3">
       <span className="text-3xl">{icon}</span>
       <div>
-        <div className="chip font-bold text-coral">🔍 New clue!</div>
-        <div className="font-display text-sm font-semibold leading-tight text-ink">{title}</div>
+        <div className="chip text-magenta">! CLUE GET !</div>
+        <div className="font-body text-lg leading-tight text-ink">{title}</div>
       </div>
     </div>
   )

@@ -1,10 +1,10 @@
 import { useGame } from '../state/gameStore'
 
 export function EvidenceBoard() {
-  const { state, catalog, toggleNotebook, goToSolve } = useGame()
+  const { state, toggleNotebook, goToMeeting } = useGame()
   const found = new Set(state?.cluesFound ?? [])
-  const clues = catalog?.clues ?? []
-  const total = clues.length || 5
+  const clues = state?.clueCatalog ?? []
+  const total = clues.length || 7
   const notebook = state?.notebook ?? []
 
   return (
@@ -15,12 +15,12 @@ export function EvidenceBoard() {
       >
         <div className="mb-1 flex items-start justify-between">
           <div>
-            <h2 className="font-display text-2xl font-bold text-text">🔍 Evidence Board</h2>
-            <p className="chip text-dim">
+            <h2 className="font-display text-sm text-text">▤ EVIDENCE BOARD</h2>
+            <p className="mt-1 font-body text-lg text-dim">
               {found.size} of {total} clues found
             </p>
           </div>
-          <button onClick={toggleNotebook} className="btn btn-soft px-3 py-1.5 text-sm">
+          <button onClick={toggleNotebook} className="btn btn-soft px-3 py-1.5 text-[9px]">
             ✕
           </button>
         </div>
@@ -49,13 +49,14 @@ export function EvidenceBoard() {
                   <div className="min-w-0">
                     {got ? (
                       <>
-                        <div className="font-display text-sm font-bold text-ink">{c.title}</div>
-                        <div className="chip text-good">collected</div>
+                        <div className="font-body text-xl leading-tight text-ink">{c.title}</div>
+                        {c.found && <div className="font-body text-base leading-tight text-ink-dim">{c.found}</div>}
+                        <div className="chip text-good">✓ COLLECTED</div>
                       </>
                     ) : (
                       <>
-                        <div className="font-display text-sm font-bold text-dim">??? Locked clue</div>
-                        <div className="font-body text-xs text-dim">{c.hint}</div>
+                        <div className="chip text-dim">??? LOCKED</div>
+                        <div className="font-body text-lg leading-tight text-dim">{c.hint}</div>
                       </>
                     )}
                   </div>
@@ -67,19 +68,19 @@ export function EvidenceBoard() {
 
         {notebook.length > 0 && (
           <div className="mt-6">
-            <p className="chip mb-2 text-dim">Detective notes</p>
+            <p className="chip mb-2 text-dim">— DETECTIVE NOTES —</p>
             <ul className="flex flex-col gap-2">
               {notebook.map((n, i) => (
-                <li key={i} className="rounded-xl bg-white/6 px-3 py-2 font-body text-sm text-text/85">
-                  • {n}
+                <li key={i} className="bg-white/6 px-3 py-1.5 font-body text-lg leading-tight text-text/85">
+                  * {n}
                 </li>
               ))}
             </ul>
           </div>
         )}
 
-        <button onClick={goToSolve} className="btn btn-gold mt-6 w-full px-5 py-3 text-base">
-          ⚖️ I'm ready — Solve the Case
+        <button onClick={goToMeeting} className="btn btn-pop mt-6 w-full px-5 py-3 text-[10px]">
+          ⚠ READY — CALL THE MEETING
         </button>
       </aside>
     </div>

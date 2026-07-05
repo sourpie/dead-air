@@ -1,45 +1,58 @@
 @import 'tailwindcss';
 
 /* ════════════════════════════════════════════════════════════════════════
-   NEIGHBOURHOOD ECHOES — a cozy whodunit you can win.
-   Bright, playful board-game energy: a dusk-purple street, chunky rounded
-   cards, candy-bright neighbour colours, springy juice. Goal: collect clues,
-   accuse, score stars.
+   DEAD AIR — SABOTAGE ON STATION K-7
+   Among Us-inspired pixel social deduction. Space-black backdrop, hull-navy
+   panels, hazard yellow + emergency red accents, Press Start 2P + VT323,
+   square corners, hard shadows, security-cam scanlines, steps() animation.
+   Token NAMES are unchanged from the Maple Street build — only values moved,
+   so every component re-skins for free.
    ════════════════════════════════════════════════════════════════════════ */
 @theme {
-  /* Backdrop (dusk over Maple Street) */
-  --color-grape: #2c1f4d;
-  --color-grape-2: #1d1438;
+  --color-grape: #1c2333;   /* hull-panel navy (panel/HUD bg) */
+  --color-grape-2: #0b0f1c; /* space black (page bg) */
 
-  /* Light "card" surfaces */
-  --color-cream: #fffaf2;
-  --color-cream-2: #f4ecff;
-  --color-ink: #2a2148;
-  --color-ink-dim: #8378a8;
-  --color-card-line: #e7ddf5;
+  --color-cream: #e8ecf4;   /* light card */
+  --color-cream-2: #c3cee0;
+  --color-ink: #0b0f1c;
+  --color-ink-dim: #4c5876;
+  --color-card-line: #8b9bb4;
 
-  /* Text on the dark backdrop */
-  --color-text: #fbf4ff;
-  --color-dim: #b6a8d8;
-  --color-line: #43356b;
+  --color-text: #e8ecf4;
+  --color-dim: #8b9bb4;
+  --color-line: #2b3350;
 
-  /* Candy palette */
-  --color-coral: #ff6b5e;
-  --color-teal: #25cfb0;
-  --color-gold: #ffc94d;
-  --color-violet: #b06bff;
-  --color-magenta: #e85fc0;
-  --color-good: #43d17a;
-  --color-bad: #ff5a72;
+  --color-coral: #e04a3f;   /* EMERGENCY red */
+  --color-teal: #6ee7f0;    /* terminal cyan */
+  --color-gold: #f5d442;    /* hazard yellow */
+  --color-violet: #4f7df9;
+  --color-magenta: #c2477a;
+  --color-good: #4ade80;
+  --color-bad: #e04a3f;
 
-  /* Neighbours */
-  --color-maya: #ff8a4c;   /* baker — warm orange */
-  --color-sam: #36c5e0;    /* anxious — sky cyan */
-  --color-jules: #e85fc0;  /* gossip — magenta */
+  /* station surfaces (SVG map) */
+  --color-hull: #141a2e;
+  --color-hull-hi: #2b3350;
+  --color-floor: #3a4466;
+  --color-floor-line: #262b44;
 
-  --font-display: 'Fredoka', 'Trebuchet MS', sans-serif;
-  --font-body: 'Nunito', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  /* the five crew */
+  --color-oda: #d92f2f;     /* Red */
+  --color-vega: #ef7d57;    /* Orange */
+  --color-lin: #5fd346;     /* Lime */
+  --color-rio: #38c3e8;     /* Cyan */
+  --color-nova: #9a5ce0;    /* Purple */
+
+  --font-display: 'Press Start 2P', monospace;
+  --font-body: 'VT323', monospace;
+  --font-mono: 'Press Start 2P', monospace;
+}
+
+/* Retro law: nothing is round. */
+*,
+*::before,
+*::after {
+  border-radius: 0 !important;
 }
 
 html,
@@ -51,135 +64,141 @@ body,
 body {
   margin: 0;
   font-family: var(--font-body);
+  font-size: 20px;
   color: var(--color-text);
-  background-color: var(--color-grape);
+  background-color: var(--color-grape-2);
+  /* starfield: two dot layers drifting at different scales */
   background-image:
-    radial-gradient(60% 50% at 12% 0%, rgba(255, 138, 76, 0.22), transparent 60%),
-    radial-gradient(55% 45% at 100% 8%, rgba(54, 197, 224, 0.18), transparent 60%),
-    radial-gradient(70% 60% at 50% 110%, rgba(176, 107, 255, 0.25), transparent 60%),
-    linear-gradient(180deg, var(--color-grape) 0%, var(--color-grape-2) 100%);
-  background-attachment: fixed;
-  -webkit-font-smoothing: antialiased;
+    radial-gradient(1px 1px at 20px 30px, #8b9bb4 50%, transparent 50%),
+    radial-gradient(1px 1px at 90px 130px, #e8ecf4 50%, transparent 50%),
+    radial-gradient(2px 2px at 160px 60px, #4c5876 50%, transparent 50%);
+  background-size: 180px 180px, 240px 240px, 320px 320px;
+  image-rendering: pixelated;
+  -webkit-font-smoothing: none;
 }
 
 h1, h2, h3, h4, .font-display {
   font-family: var(--font-display);
 }
 
-/* Confetti-dot sparkle layer (very subtle) */
-.sparkle {
+/* ── Security-cam overlay: scanlines + vignette ──────────────────────── */
+.scanlines {
   position: fixed;
   inset: 0;
-  z-index: 0;
+  z-index: 50;
   pointer-events: none;
-  opacity: 0.5;
-  background-image:
-    radial-gradient(rgba(255, 255, 255, 0.5) 1px, transparent 1.4px);
-  background-size: 46px 46px;
-  background-position: 0 0;
-  mask-image: radial-gradient(120% 90% at 50% 0%, #000 0%, transparent 70%);
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.12) 0px,
+    rgba(0, 0, 0, 0.12) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}
+.crt-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 49;
+  pointer-events: none;
+  background: radial-gradient(120% 100% at 50% 45%, transparent 60%, rgba(4, 6, 16, 0.6) 100%);
 }
 
-/* ── Cards & panels ──────────────────────────────────────────────────── */
+/* ── Pixel panels ────────────────────────────────────────────────────── */
 
-/* Bright card (clues, dialogue, evidence) */
+/* Light card ("printout" of the station world) */
 .gcard {
-  background: linear-gradient(180deg, var(--color-cream), var(--color-cream-2));
+  background: var(--color-cream);
   color: var(--color-ink);
-  border: 2px solid #fff;
-  border-radius: 20px;
-  box-shadow:
-    0 2px 0 rgba(255, 255, 255, 0.7) inset,
-    0 16px 30px -16px rgba(20, 8, 48, 0.7);
+  border: 3px solid var(--color-ink);
+  box-shadow: 0 0 0 3px var(--color-cream), 6px 8px 0 rgba(0, 0, 0, 0.55);
 }
 
-/* Frosted panel on the dusk backdrop (HUD chrome, side rails) */
+/* Dark console panel (textboxes, HUD chrome) */
 .gpanel {
-  background: rgba(255, 255, 255, 0.06);
-  border: 1.5px solid var(--color-line);
-  border-radius: 20px;
-  box-shadow: 0 18px 40px -28px rgba(0, 0, 0, 0.8);
-  backdrop-filter: blur(8px);
+  background: var(--color-grape-2);
+  border: 3px solid var(--color-cream);
+  box-shadow: 0 0 0 3px var(--color-grape-2), 6px 8px 0 rgba(0, 0, 0, 0.55);
 }
 
 .chip {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.12em;
+  font-family: var(--font-display);
+  font-size: 8px;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
+  line-height: 1.6;
 }
 
-/* ── Chunky buttons with press juice ─────────────────────────────────── */
+/* ── Chunky pixel buttons ────────────────────────────────────────────── */
 .btn {
   font-family: var(--font-display);
-  font-weight: 600;
-  border-radius: 14px;
-  transition: transform 0.12s cubic-bezier(0.2, 0.8, 0.2, 1), filter 0.12s ease,
-    box-shadow 0.12s ease;
+  border: 3px solid var(--color-grape-2);
+  box-shadow: 4px 4px 0 var(--color-grape-2);
+  transition: none;
   cursor: pointer;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
 }
 .btn:active {
-  transform: translateY(2px);
+  transform: translate(4px, 4px);
+  box-shadow: 0 0 0 var(--color-grape-2);
 }
 .btn-pop {
-  color: #fff;
-  background: linear-gradient(180deg, var(--color-coral), #ef4f43);
-  box-shadow: 0 6px 0 #c23b32, 0 14px 24px -10px rgba(255, 107, 94, 0.7);
+  color: #e8ecf4;
+  background: var(--color-coral);
 }
-.btn-pop:active {
-  box-shadow: 0 2px 0 #c23b32, 0 8px 14px -10px rgba(255, 107, 94, 0.7);
-}
+.btn-pop:hover { background: #f06a5f; }
 .btn-gold {
-  color: #4a3500;
-  background: linear-gradient(180deg, #ffd96b, var(--color-gold));
-  box-shadow: 0 6px 0 #d39a1f, 0 14px 24px -10px rgba(255, 201, 77, 0.7);
+  color: var(--color-grape-2);
+  background: var(--color-gold);
 }
-.btn-gold:active {
-  box-shadow: 0 2px 0 #d39a1f;
-}
+.btn-gold:hover { background: #ffe680; }
 .btn-soft {
   color: var(--color-text);
-  background: rgba(255, 255, 255, 0.08);
-  border: 1.5px solid var(--color-line);
+  background: var(--color-grape);
+  border-color: var(--color-cream);
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.6);
 }
-.btn-soft:hover {
-  background: rgba(255, 255, 255, 0.14);
-}
+.btn-soft:hover { background: #273049; }
 
-/* ── Motion ───────────────────────────────────────────────────────────── */
-@keyframes pop-in {
-  0% { opacity: 0; transform: scale(0.85) translateY(8px); }
-  60% { opacity: 1; transform: scale(1.04); }
-  100% { opacity: 1; transform: scale(1) translateY(0); }
+/* ── Retro motion (steps() everywhere) ───────────────────────────────── */
+@keyframes blink-step {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
 }
-.animate-pop { animation: pop-in 0.4s cubic-bezier(0.2, 0.9, 0.25, 1.2) both; }
+.blink { animation: blink-step 1s steps(1) infinite; }
+
+@keyframes pop-in {
+  0% { opacity: 0; transform: scale(0.7); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.animate-pop { animation: pop-in 0.18s steps(3) both; }
 
 @keyframes rise {
-  from { opacity: 0; transform: translateY(14px); }
+  from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
 }
-.animate-rise { animation: rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.animate-rise { animation: rise 0.25s steps(4) both; }
 
 @keyframes float-y {
   0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
+  50% { transform: translateY(-4px); }
 }
-.animate-float { animation: float-y 4s ease-in-out infinite; }
+.animate-float { animation: float-y 1.6s steps(2) infinite; }
 
 @keyframes toast-in {
-  0% { opacity: 0; transform: translateX(40px) scale(0.9); }
-  15% { opacity: 1; transform: translateX(0) scale(1); }
-  85% { opacity: 1; transform: translateX(0) scale(1); }
-  100% { opacity: 0; transform: translateX(40px) scale(0.95); }
+  0% { opacity: 0; transform: translateX(30px); }
+  10% { opacity: 1; transform: translateX(0); }
+  88% { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(30px); }
 }
-.animate-toast { animation: toast-in 3s ease both; }
+.animate-toast { animation: toast-in 3s steps(8) both; }
 
 @keyframes star-pop {
-  0% { opacity: 0; transform: scale(0) rotate(-30deg); }
-  70% { transform: scale(1.25) rotate(8deg); }
-  100% { opacity: 1; transform: scale(1) rotate(0); }
+  0% { opacity: 0; transform: scale(0); }
+  100% { opacity: 1; transform: scale(1); }
 }
-.animate-star { animation: star-pop 0.5s cubic-bezier(0.2, 0.9, 0.25, 1.4) both; }
+.animate-star { animation: star-pop 0.3s steps(3) both; }
 
 @keyframes thread-travel {
   from { stroke-dashoffset: 600; }
@@ -187,11 +206,85 @@ h1, h2, h3, h4, .font-display {
 }
 .thread-travel {
   stroke-dasharray: 600;
-  animation: thread-travel 1.6s ease both;
+  animation: thread-travel 1.4s steps(14) both;
 }
 
 @keyframes confetti-fall {
-  0% { opacity: 0; transform: translateY(-20px) rotate(0); }
+  0% { opacity: 0; transform: translateY(-20px); }
   10% { opacity: 1; }
-  100% { opacity: 0; transform: translateY(60vh) rotate(540deg); }
+  100% { opacity: 0; transform: translateY(60vh); }
 }
+
+@keyframes sheet-up {
+  from { opacity: 0; transform: translateY(40px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-sheet { animation: sheet-up 0.22s steps(4) both; }
+
+/* map life */
+@keyframes idle-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-3px); }
+}
+.npc-bob { animation: idle-bob 1.4s steps(2) infinite; transform-box: fill-box; }
+
+@keyframes twinkle {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+.star-twinkle { animation: twinkle 1.8s steps(2) infinite; }
+
+@keyframes steam-rise {
+  0% { opacity: 0.9; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-22px); }
+}
+.steam { animation: steam-rise 1.6s steps(5) infinite; transform-box: fill-box; }
+
+@keyframes badge-pulse {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+.badge-pulse { animation: badge-pulse 1s steps(2) infinite; transform-box: fill-box; }
+
+@keyframes bubble-pop {
+  0% { opacity: 0; transform: scale(0); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.bubble-pop { animation: bubble-pop 0.2s steps(3) both; transform-box: fill-box; transform-origin: center bottom; }
+
+@keyframes lamp-glow {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.85; }
+}
+.lamp-glow { animation: lamp-glow 2.4s steps(2) infinite; }
+
+/* ── DEAD AIR additions ──────────────────────────────────────────────── */
+
+/* chat indicator: three blinking dots over talking crew */
+@keyframes chat-dots {
+  0% { opacity: 0.2; }
+  33% { opacity: 1; }
+  100% { opacity: 0.2; }
+}
+.chat-dot { animation: chat-dots 1.2s steps(3) infinite; }
+
+/* emergency meeting: pulsing alarm wash */
+@keyframes alarm-pulse {
+  0%, 100% { background-color: #0b0f1c; }
+  50% { background-color: #2a1017; }
+}
+.alarm-pulse { animation: alarm-pulse 1.6s steps(2) infinite; }
+
+/* ejected crewmate tumbling across the stars */
+@keyframes eject-drift {
+  from { transform: translateX(-15vw) rotate(0deg); }
+  to { transform: translateX(115vw) rotate(1080deg); }
+}
+.eject-drift { animation: eject-drift 5s steps(60) both; }
+
+/* slow planet drift in the map backdrop */
+@keyframes space-drift {
+  from { transform: translateX(-160px); }
+  to { transform: translateX(1440px); }
+}
+.space-drift { animation: space-drift 90s steps(180) infinite; }

@@ -1,92 +1,97 @@
 import { useGame } from '../state/gameStore'
 import { HowItWorks } from '../components/HowItWorks'
-import { NPCS } from '../data/npcs'
+import { CREW_IDS, NPCS } from '../data/npcs'
+import { NPC_SPRITES } from '../components/map/sprites'
 import type { NpcId } from '../types'
 
-const CAST: NpcId[] = ['maya', 'sam', 'jules']
-
 const STEPS = [
-  { icon: '🗣️', title: 'Talk to neighbours', body: 'Visit three doors and pick what to say. Win people over and they spill secrets.' },
-  { icon: '🔍', title: 'Collect 5 clues', body: 'Every reveal drops a clue into your evidence board. Find them all to crack the case.' },
-  { icon: '🤞', title: 'Keep (or break) a promise', body: 'Maya trusts you with a secret. Spill it to Jules and it spreads — and costs you points.' },
-  { icon: '⚖️', title: 'Accuse & score', body: 'Say what really happened. Solve it AND keep trust to earn ⭐⭐⭐.' },
-]
+  ['🗣', 'INTERROGATE', 'Question 5 crew members. Every answer comes from what they actually remember.'],
+  ['👂', 'EAVESDROP', 'The crew talk to each other on the map. Get close to overhear — from afar you only see THAT they talked.'],
+  ['?', 'COLLECT EVIDENCE', 'Search rooms, pull the door log, catch statements that contradict the facts.'],
+  ['⚠', 'CALL THE MEETING', 'Eject the saboteur. A new culprit, motive and alibi every run.'],
+] as const
 
 export function StartPage() {
   const { startGame, loading, error, toggleHowItWorks, showHowItWorks } = useGame()
 
   return (
-    <div className="mx-auto min-h-screen max-w-5xl px-6 py-12">
-      {/* Hero */}
-      <div className="animate-rise text-center">
-        <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-1">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-gold" />
-          <span className="chip text-dim">A cozy whodunit · powered by NPC memory</span>
-        </div>
-        <h1 className="font-display text-6xl font-bold leading-[0.95] tracking-tight text-text sm:text-8xl">
-          Neighbourhood
-          <br />
-          <span className="bg-linear-to-r from-coral via-gold to-magenta bg-clip-text text-transparent">
-            Echoes
-          </span>
+    <div className="mx-auto min-h-screen max-w-4xl px-4 py-10 text-center sm:px-6">
+      {/* title */}
+      <div className="animate-rise">
+        <p className="chip text-teal">— INCIDENT REPORT K7/099 —</p>
+        <h1 className="mt-5 font-display text-3xl leading-relaxed text-cream sm:text-5xl" style={{ textShadow: '4px 4px 0 #e04a3f, 8px 8px 0 #0b0f1c' }}>
+          DEAD<span className="text-coral">//</span><span className="text-gold">AIR</span>
         </h1>
-        <p className="mx-auto mt-5 max-w-2xl font-body text-xl leading-relaxed text-dim sm:text-2xl">
-          Someone broke into the garden shed. Talk to the neighbours, gather the clues —
-          but careful: <span className="font-bold text-gold">they remember every word you say.</span>
+        <p className="mt-2 font-display text-[10px] text-dim">SABOTAGE ON STATION K-7</p>
+        <p className="mx-auto mt-5 max-w-xl font-body text-2xl leading-tight text-dim">
+          Overnight, someone cut a life system. Five crew. One saboteur. Interrogate them —
+          but careful: <span className="text-gold">they remember every word you say.</span>
         </p>
       </div>
 
-      {/* Goal banner */}
-      <div className="animate-rise gcard mx-auto mt-9 max-w-3xl px-6 py-5 text-center" style={{ animationDelay: '80ms' }}>
-        <p className="chip text-coral">🎯 Your mission</p>
-        <p className="mt-1 font-body text-lg font-semibold text-ink sm:text-xl">
-          Find all <b className="text-coral">5 clues</b>, then accuse the right culprit — and keep the
-          neighbourhood's trust to earn a <b className="text-coral">3‑star</b> rating.
+      {/* mission */}
+      <div className="animate-rise gcard mx-auto mt-7 max-w-2xl p-4" style={{ animationDelay: '80ms' }}>
+        <p className="chip text-magenta">** YOUR MISSION **</p>
+        <p className="mt-1.5 font-body text-xl leading-tight text-ink">
+          Gather <b>7 clues</b> in 4 shifts → break the saboteur's alibi → eject the right crewmate
+          → earn <b>★★★</b>
         </p>
       </div>
 
-      {/* How to win — 4 chunky steps */}
-      <div className="animate-rise mt-9 grid gap-4 sm:grid-cols-2 lg:grid-cols-4" style={{ animationDelay: '140ms' }}>
-        {STEPS.map((s, i) => (
-          <div key={i} className="gpanel relative p-5">
-            <div className="text-3xl">{s.icon}</div>
-            <div className="mt-2 flex items-center gap-2">
-              <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gold font-display text-xs font-bold text-ink">
-                {i + 1}
-              </span>
-              <h3 className="font-display text-base font-semibold text-text">{s.title}</h3>
+      {/* how to play */}
+      <div className="animate-rise mt-7 grid gap-3 text-left sm:grid-cols-2" style={{ animationDelay: '140ms' }}>
+        {STEPS.map(([icon, title, body], i) => (
+          <div key={i} className="gpanel flex gap-3 p-3.5">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center bg-gold font-display text-sm text-ink">
+              {icon}
+            </span>
+            <div>
+              <h3 className="chip text-gold">{i + 1}. {title}</h3>
+              <p className="mt-1 font-body text-lg leading-tight text-dim">{body}</p>
             </div>
-            <p className="mt-1.5 font-body text-sm leading-snug text-dim">{s.body}</p>
           </div>
         ))}
       </div>
 
-      {/* The cast */}
-      <div className="animate-rise mt-10" style={{ animationDelay: '200ms' }}>
-        <p className="mb-4 text-center font-display text-sm font-semibold uppercase tracking-wider text-dim">
-          Meet the neighbours
-        </p>
-        <div className="grid gap-4 sm:grid-cols-3">
-          {CAST.map((id, i) => (
-            <CastCard key={id} id={id} delay={240 + i * 70} />
-          ))}
+      {/* the crew */}
+      <div className="animate-rise mt-8" style={{ animationDelay: '200ms' }}>
+        <p className="chip mb-3 text-dim">— THE CREW OF K-7 —</p>
+        <div className="flex flex-wrap items-end justify-center gap-5 sm:gap-8">
+          {CREW_IDS.map((id, i) => {
+            const sprite = NPC_SPRITES[id]
+            return (
+              <div key={id} className="animate-pop flex flex-col items-center gap-2" style={{ animationDelay: `${260 + i * 90}ms` }}>
+                <svg viewBox="0 0 60 80" className="h-24 w-18 sm:h-28 sm:w-21" shapeRendering="crispEdges">
+                  <g className="npc-bob" style={{ animationDelay: `${i * 0.4}s` }}>
+                    {sprite.rows.flatMap((row, y) =>
+                      [...row].map((ch, x) =>
+                        ch === '.' ? null : (
+                          <rect key={`${x}-${y}`} x={x * 5} y={y * 5} width="5" height="5" fill={sprite.palette[ch]} />
+                        ),
+                      ),
+                    )}
+                  </g>
+                </svg>
+                <span className="chip" style={{ color: NPCS[id].accent }}>{NPCS[id].name.split(' ').pop()!.toUpperCase()}</span>
+                <span className="max-w-32 font-body text-base leading-none text-dim">{roleHint(id)}</span>
+              </div>
+            )
+          })}
         </div>
       </div>
 
       {/* CTA */}
-      <div className="animate-rise mt-10 flex flex-col items-center gap-3" style={{ animationDelay: '320ms' }}>
-        <button onClick={() => startGame(false)} disabled={loading} className="btn btn-pop px-10 py-4 text-xl disabled:opacity-60">
-          {loading ? 'Opening the case…' : '🔍 Start the Investigation'}
+      <div className="animate-rise mt-9 flex flex-col items-center gap-4" style={{ animationDelay: '320ms' }}>
+        <button onClick={() => startGame()} disabled={loading} className="btn btn-pop px-8 py-4 text-sm disabled:opacity-60 sm:text-base">
+          {loading ? 'GENERATING MYSTERY…' : <span><span className="blink">▶</span> BOARD THE STATION</span>}
         </button>
-        <button onClick={() => toggleHowItWorks(true)} className="font-body text-sm text-dim underline-offset-4 hover:text-text hover:underline">
-          How does NPC memory work?
+        <button onClick={() => toggleHowItWorks(true)} className="font-body text-lg text-dim underline-offset-4 hover:text-text hover:underline">
+          how does crew memory work?
         </button>
       </div>
 
       {error && (
-        <p className="animate-rise mx-auto mt-6 max-w-lg rounded-2xl bg-bad/15 px-4 py-3 text-center font-mono text-sm text-bad">
-          {error}
-        </p>
+        <p className="animate-rise gcard mx-auto mt-6 max-w-lg p-3 font-body text-lg text-bad">{error}</p>
       )}
 
       {showHowItWorks && <HowItWorks />}
@@ -94,24 +99,12 @@ export function StartPage() {
   )
 }
 
-function CastCard({ id, delay }: { id: NpcId; delay: number }) {
-  const npc = NPCS[id]
-  return (
-    <div className="gcard animate-pop overflow-hidden text-center" style={{ animationDelay: `${delay}ms` }}>
-      <div className="h-2" style={{ background: npc.colorVar }} />
-      <div className="px-4 pb-5 pt-4">
-        <div className="animate-float text-5xl" style={{ animationDelay: `${delay}ms` }}>
-          {npc.emoji}
-        </div>
-        <div className="mt-2 font-display text-lg font-bold" style={{ color: npc.colorVar }}>
-          {npc.name}
-        </div>
-        <div className="font-body text-sm font-semibold text-ink-dim">{roleHint(id)}</div>
-      </div>
-    </div>
-  )
-}
-
 function roleHint(id: NpcId): string {
-  return id === 'maya' ? 'has a secret to protect' : id === 'sam' ? 'the one being blamed' : 'turns secrets into gossip'
+  return {
+    oda: 'runs the station',
+    vega: 'keeps it breathing',
+    lin: 'sees the nights',
+    rio: 'hears everything',
+    nova: 'wants the chair',
+  }[id]
 }

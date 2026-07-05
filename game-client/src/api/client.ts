@@ -1,9 +1,14 @@
-// Typed fetch wrapper around the FastAPI backend (one function per endpoint).
+// Typed fetch wrapper around the DEAD AIR FastAPI backend (one function per endpoint).
 import type {
+  AskResponse,
   Catalog,
+  ExamineResponse,
   GameState,
   MemoryEvent,
   NpcId,
+  OverhearResponse,
+  RoomId,
+  SayResponse,
   TalkResponse,
 } from '../types'
 
@@ -22,15 +27,17 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => req<{ status: string; npcs: NpcId[] }>('/health'),
+  health: () => req<{ status: string; crew: NpcId[] }>('/health'),
 
   getState: () => req<GameState>('/game/state'),
 
-  start: (reseed = false) =>
+  start: (seed?: number, reseed = true) =>
     req<GameState>('/game/start', {
       method: 'POST',
-      body: JSON.stringify({ reseed }),
+      body: JSON.stringify({ seed: seed ?? null, reseed }),
     }),
+
+  catalog: () => req<Catalog>('/game/catalog'),
 
   talk: (npcId: NpcId) =>
     req<TalkResponse>('/npc/talk', {
@@ -38,20 +45,40 @@ export const api = {
       body: JSON.stringify({ npcId }),
     }),
 
-  choose: (npcId: NpcId, choiceId: string) =>
-    req<{ state: GameState; nextNodeId: string; newClues: string[] }>('/game/choose', {
+  ask: (npcId: NpcId, verb: string, arg: string | null) =>
+    req<AskResponse>('/npc/ask', {
       method: 'POST',
-      body: JSON.stringify({ npcId, choiceId }),
+      body: JSON.stringify({ npcId, verb, arg }),
     }),
 
-  advanceDay: () => req<GameState>('/day/advance', { method: 'POST' }),
-
-  catalog: () => req<Catalog>('/game/catalog'),
-
-  solve: (theoryId: string) =>
-    req<GameState>('/game/solve', {
+  say: (npcId: NpcId, text: string) =>
+    req<SayResponse>('/npc/say', {
       method: 'POST',
-      body: JSON.stringify({ theoryId }),
+      body: JSON.stringify({ npcId, text }),
+    }),
+
+  advanceShift: (playerRoom: RoomId | null) =>
+    req<{ state: GameState; firedTransfers: string[] }>('/shift/advance', {
+      method: 'POST',
+      body: JSON.stringify({ playerRoom }),
+    }),
+
+  overhear: (encounterId: string, playerRoom: RoomId) =>
+    req<OverhearResponse>('/encounter/overhear', {
+      method: 'POST',
+      body: JSON.stringify({ encounterId, playerRoom }),
+    }),
+
+  examine: (spotId: string) =>
+    req<ExamineResponse>('/world/examine', {
+      method: 'POST',
+      body: JSON.stringify({ spotId }),
+    }),
+
+  accuse: (npcId: NpcId) =>
+    req<GameState>('/game/accuse', {
+      method: 'POST',
+      body: JSON.stringify({ npcId }),
     }),
 
   debugMemories: (npcId: NpcId) =>
